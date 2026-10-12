@@ -2,10 +2,10 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { fetchOrigin, gitMust, hasOrigin, requireRepoRoot, worktrees } from '../git.ts';
 import { defaultBranch, listPullRequests, originRepo } from '../github.ts';
-import type { GithubRepoRef } from '../github.ts';
 import { worktreeOwner, worktreeRoot } from '../paths.ts';
 import type { WorktreeOwner } from '../paths.ts';
 import { CliError } from '../proc.ts';
+import type { GithubRepoRef } from '../repo-ref.ts';
 
 /** An open pull request of the repository. */
 export interface PullRequest {
@@ -18,23 +18,32 @@ export interface PullRequest {
 /**
  * A worktree of the repository. `owner` tells who owns it: `tern` for a tern-managed worktree, `<root>/<repo>/<slug>`, `omp` for an omp-owned one,
  * elsewhere in the omp worktree root, and null for a worktree that is not in the worktree root. `managed` is true for a tern-managed worktree.
+ * `main` is true for the main checkout.
  */
 export interface BranchWorktree {
   branch: string | null;
   path: string;
+  main: boolean;
   managed: boolean;
   owner: WorktreeOwner;
 }
 
-/** The branch picker data of a repository. */
+/** The branch picker data of a repository. `prsFailed` is true when `gh pr list` failed, and false offline and when `origin` is not a GitHub repository. */
 export interface BranchesResult {
   repo: string;
   name: string;
   default: string;
   branches: string[];
   prs: PullRequest[];
+  prsFailed: boolean;
   worktrees: BranchWorktree[];
   warnings: string[];
+}
+
+/** The open pull requests. `failed` is true when `gh pr list` failed. */
+interface OpenPullRequests {
+  failed: boolean;
+  prs: PullRequest[];
 }
 
 const REMOTE_PREFIX = 'refs/remotes/origin/';
@@ -51,12 +60,12 @@ const listBranches = async (root: string, withOrigin: boolean): Promise<string[]
   return [...new Set(names)];
 };
 
-const openPullRequests = async (repoRef: GithubRepoRef, warnings: string[]): Promise<PullRequest[]> => {
+const openPullRequests = async (repoRef: GithubRepoRef, warnings: string[]): Promise<OpenPullRequests> => {
   const { error, prs } = await listPullRequests(repoRef, ['--state', 'open', '--limit', '200'], ['number', 'title', 'headRefName', 'isCrossRepository']);
   if (error !== null) {
     warnings.push(`pr list failed: ${error}`);
   }
-  return prs.map(pr => ({ branch: pr.headRefName, fork: pr.isCrossRepository, number: pr.number, title: pr.title }));
+  return { failed: error !== null, prs: prs.map(pr => ({ branch: pr.headRefName, fork: pr.isCrossRepository, number: pr.number, title: pr.title })) };
 };
 
 /** `branches --repo <dir> [--offline]`: the branches, open pull requests and worktrees of the repository that holds `dir`. `--offline` reads only local refs: no fetch and no pull requests. */
@@ -76,9 +85,9 @@ export const run = async (args: string[]): Promise<BranchesResult> => {
     }
   }
   const repoRef = offline ? null : await originRepo(root);
-  const [branches, prs, repoWorktrees, defaultName, wtRoot] = await Promise.all([
+  const [branches, pullRequests, repoWorktrees, defaultName, wtRoot] = await Promise.all([
     listBranches(root, withOrigin),
-    repoRef === null ? [] : openPullRequests(repoRef, warnings),
+    repoRef === null ? { failed: false, prs: [] } : openPullRequests(repoRef, warnings),
     worktrees(root),
     defaultBranch(root, { offline }),
     worktreeRoot(),
@@ -87,12 +96,13 @@ export const run = async (args: string[]): Promise<BranchesResult> => {
     branches,
     default: defaultName,
     name: path.basename(root),
-    prs,
+    prs: pullRequests.prs,
+    prsFailed: pullRequests.failed,
     repo: root,
     warnings,
     worktrees: repoWorktrees.map(worktree => {
       const owner = worktreeOwner(wtRoot, root, worktree.path);
-      return { branch: worktree.branch, managed: owner === 'tern', owner, path: worktree.path };
+      return { branch: worktree.branch, main: worktree.main, managed: owner === 'tern', owner, path: worktree.path };
     }),
   };
 };

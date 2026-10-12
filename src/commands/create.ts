@@ -2,18 +2,27 @@ import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { fetchOrigin, gitMust, gitRun, gitSucceeds, hardToRebuild, hasOrigin, requireRepoRoot, worktreeLosses, worktrees } from '../git.ts';
+import { loadConfig } from '../config.ts';
+import { fetchOrigin, gitMust, gitRun, gitSucceeds, hasOrigin, requireRepoRoot, worktrees } from '../git.ts';
 import type { Worktree } from '../git.ts';
-import { defaultBranch, ghMust, ghMustWith, nameWithOwner, originRepo } from '../github.ts';
+import { defaultBranch, ghMust, ghMustWith, originRepo } from '../github.ts';
 import type { GhPullRequest } from '../github.ts';
 import { ompSettings, ompWorktreeAdd } from '../omp.ts';
 import { isUnder, worktreeOwner, worktreePath, worktreeRoot } from '../paths.ts';
-import type { WorktreeRoot } from '../paths.ts';
+import type { WorktreeOwner, WorktreeRoot } from '../paths.ts';
 import { CliError } from '../proc.ts';
-import { blocksUnder, focus, newSession, newTab, rename, sessionForRepo } from '../tern.ts';
+import { nameWithOwner } from '../repo-ref.ts';
+import { blocksUnder, focus, newSession, newTab, rename, sessionForRepo, typeInto, waitForPrompt } from '../tern.ts';
+import { findWorkToLose, stopOnWorkToLose } from '../work-to-lose.ts';
 
 /** How `create` got the worktree. */
 export type CreateStatus = 'created' | 'relocated' | 'reused';
+
+/** How long `create` waits for the shell prompt of the tab it opened before it types the setup commands. */
+const SETUP_PROMPT_SECONDS = 30;
+
+/** Who owns the worktree that `create` gives. */
+type Owner = Exclude<WorktreeOwner, null>;
 
 /** The Tern tab that shows the worktree. */
 export interface CreatedTab {
@@ -22,12 +31,18 @@ export interface CreatedTab {
   session: string;
 }
 
-/** The output of `create`. `carried` lists the ignored files that a relocation copied into the rebuilt worktree, and is empty otherwise. */
+/**
+ * The output of `create`. `carried` lists the ignored files that a relocation copied into the rebuilt worktree, and is empty otherwise.
+ * `owner` is `tern` for a tern-managed worktree and `omp` for an omp-owned one.
+ * `setup` holds the setup commands of a new worktree as one `line`. `typed` is true when `create` typed the line into the tab that it opened. `setup` is null for a reused or relocated worktree, and for a repository without setup commands.
+ */
 export interface CreateResult {
   branch: string;
   carried: string[];
+  owner: Owner;
   path: string;
   repo: string;
+  setup: { line: string; typed: boolean } | null;
   status: CreateStatus;
   tab: CreatedTab | null;
   warnings: string[];
@@ -42,15 +57,22 @@ interface Options {
   'repo'?: string;
 }
 
+/** The hard-to-rebuild files of the first worktree, and the temporary folder that keeps their copies. */
 interface Carry {
   files: string[];
   staging: string;
 }
 
+/** What `moveOrClear` gives when git refused the move and the first worktree is gone: the carried files and the first line of the refusal. */
+interface Cleared {
+  carry: Carry;
+  refusal: string;
+}
+
 /** `clone` is the omp binary when omp clone mode makes the worktrees, else null. */
 interface Context {
-  carry: Carry | null;
   clone: string | null;
+  fetchWarning: string | null;
   repoName: string;
   root: string;
   warnings: string[];
@@ -64,6 +86,7 @@ interface Target {
   forkPr: string | null;
   ompPrBranch: string | null;
   path: string;
+  pr: string | null;
 }
 
 interface Placement {
@@ -71,8 +94,11 @@ interface Placement {
   relocate: boolean;
 }
 
+/** `owner` is the {@link worktreeOwner} of `path`. `carried` lists the hard-to-rebuild files that a rebuilt relocation copied into the worktree, and is empty otherwise. */
 interface Placed {
   branch: string;
+  carried: string[];
+  owner: Owner;
   path: string;
   status: CreateStatus;
 }
@@ -140,14 +166,14 @@ const pullRequestTarget = async (ctx: Context, pr: string): Promise<Target> => {
   const { headRefName, isCrossRepository } = JSON.parse(view) as Pick<GhPullRequest, 'headRefName' | 'isCrossRepository'>;
   if (isCrossRepository) {
     const branch = `pr-${pr}`;
-    return { branch, forkPr: pr, ompPrBranch: null, path: worktreePath(ctx.wtRoot, ctx.repoName, branch) };
+    return { branch, forkPr: pr, ompPrBranch: null, path: worktreePath(ctx.wtRoot, ctx.repoName, branch), pr };
   }
-  return { branch: headRefName, forkPr: null, ompPrBranch: `pr-${pr}`, path: worktreePath(ctx.wtRoot, ctx.repoName, headRefName) };
+  return { branch: headRefName, forkPr: null, ompPrBranch: `pr-${pr}`, path: worktreePath(ctx.wtRoot, ctx.repoName, headRefName), pr };
 };
 
 const sourceTarget = async (ctx: Context, source: Source): Promise<{ isNew: boolean; target: Target }> => {
   if ('branch' in source) {
-    const target = { branch: source.branch, forkPr: null, ompPrBranch: null, path: worktreePath(ctx.wtRoot, ctx.repoName, source.branch) };
+    const target = { branch: source.branch, forkPr: null, ompPrBranch: null, path: worktreePath(ctx.wtRoot, ctx.repoName, source.branch), pr: null };
     return { isNew: source.isNew, target };
   }
   return { isNew: false, target: await pullRequestTarget(ctx, source.pr) };
@@ -182,7 +208,13 @@ const addSpec = async (ctx: Context, target: Target, isNew: boolean): Promise<Ad
   if (await hasRef(ctx, `refs/remotes/origin/${target.branch}`)) {
     return { detach: false, newBranch: target.branch, start: `origin/${target.branch}`, track: true };
   }
-  throw badArgs(`no branch ${target.branch}; pass --new to create it`);
+  if (target.pr === null) {
+    throw badArgs(`no branch ${target.branch}; pass --new to create it`);
+  }
+  if (ctx.fetchWarning === null) {
+    throw badArgs(`branch ${target.branch} of pull request ${target.pr} is not on origin; it may have been deleted`);
+  }
+  throw new CliError('git_failed', `no branch ${target.branch} of pull request ${target.pr} locally or on origin; ${ctx.fetchWarning}`);
 };
 
 const addArgs = (spec: AddSpec): string[] => [...(spec.detach ? ['--detach'] : []), ...(spec.newBranch === null ? [] : ['-b', spec.newBranch])];
@@ -239,11 +271,9 @@ const copyEntry = (from: string, to: string): void => {
   copyFileSync(from, to);
 };
 
-const stage = (ctx: Context, dir: string, files: string[]): void => {
-  const staging = mkdtempSync(path.join(tmpdir(), 'tern-wt-carry-'));
-  ctx.carry = { files, staging };
+const copyAll = (from: string, to: string, files: string[]): void => {
   for (const file of files) {
-    copyEntry(path.join(dir, file), path.join(staging, file));
+    copyEntry(path.join(from, file), path.join(to, file));
   }
 };
 
@@ -269,41 +299,70 @@ const withStaging = (error: Error, staging: string): CliError => {
   return new CliError(code, `${error.message}; the carried files stay in ${staging}`, { ...extra, staging });
 };
 
-const moveOrClear = async (ctx: Context, target: Target, existing: Worktree): Promise<string | null> => {
+/** Runs `step`, and adds the staging folder of `carry` to each error that it throws. */
+const afterStaging = async <T>(carry: Carry, step: () => Promise<T>): Promise<T> => {
+  try {
+    return await step();
+  } catch (error) {
+    // SAFETY: the steps after staging throw a CliError, or an Error from node:fs.
+    throw withStaging(error as Error, carry.staging);
+  }
+};
+
+const updateSubmodules = async (ctx: Context, dir: string): Promise<void> => {
+  const result = await gitRun(dir, 'submodule', 'update', '--init', '--recursive');
+  if (result.status !== 0) {
+    ctx.warnings.push(`submodule update failed: ${result.stderr.trim()}`);
+  }
+};
+
+const moveOrClear = async (ctx: Context, target: Target, existing: Worktree): Promise<Cleared | null> => {
   const moved = await gitRun(ctx.root, 'worktree', 'move', existing.path, target.path);
   if (moved.status === 0) {
     return null;
   }
-  const files = await worktreeLosses(existing.path);
-  if (files.length > 0) {
-    throw new CliError('dirty_worktree', `${existing.path} has work that recreating it would lose`, { existing: existing.path, files });
-  }
-  stage(ctx, existing.path, await hardToRebuild(existing.path));
-  await gitMust(ctx.root, 'worktree', 'remove', '--force', '--force', existing.path);
-  const [reason] = moved.stderr.split('\n');
-  return reason;
+  const work = await findWorkToLose(existing.path, null);
+  stopOnWorkToLose(existing.path, 'recreating', { changes: work.changes, hardToRebuild: [] });
+  const carry: Carry = { files: work.hardToRebuild, staging: mkdtempSync(path.join(tmpdir(), 'tern-wt-carry-')) };
+  await afterStaging(carry, async () => {
+    copyAll(existing.path, carry.staging, carry.files);
+    await gitMust(ctx.root, 'worktree', 'remove', '--force', '--force', existing.path);
+  });
+  const [refusal] = moved.stderr.split('\n');
+  return { carry, refusal };
 };
 
-const relocate = async (ctx: Context, target: Target, existing: Worktree): Promise<void> => {
+/** Adds the worktree of `target` again after `moveOrClear` removed it, updates its submodules, then copies the carried files into it. Gives the carried files. */
+const rebuild = async (ctx: Context, target: Target, cleared: Cleared): Promise<string[]> =>
+  await afterStaging(cleared.carry, async () => {
+    await addWorktree(ctx, target, false, null);
+    ctx.warnings.push(`recreated: git worktree move refused (${cleared.refusal})`);
+    await updateSubmodules(ctx, target.path);
+    return unstage(ctx, cleared.carry, target.path);
+  });
+
+/** Moves the worktree `existing` to the path of `target`, or rebuilds it there when git refuses the move. Gives the carried files. */
+const relocate = async (ctx: Context, target: Target, existing: Worktree): Promise<string[]> => {
   assertPathFree(target);
   mkdirSync(path.dirname(target.path), { recursive: true });
   const lockReason = existing.locked;
   if (lockReason !== null) {
     await gitMust(ctx.root, 'worktree', 'unlock', existing.path);
   }
-  let refusal: string | null;
+  let cleared: Cleared | null;
   try {
-    refusal = await moveOrClear(ctx, target, existing);
+    cleared = await moveOrClear(ctx, target, existing);
   } catch (error) {
     if (lockReason !== null) {
       await gitMust(ctx.root, 'worktree', 'lock', '--reason', lockReason, existing.path);
     }
     throw error;
   }
-  if (refusal !== null) {
-    await addWorktree(ctx, target, false, null);
-    ctx.warnings.push(`recreated: git worktree move refused (${refusal})`);
+  if (cleared === null) {
+    await updateSubmodules(ctx, target.path);
+    return [];
   }
+  return await rebuild(ctx, target, cleared);
 };
 
 /**
@@ -317,7 +376,7 @@ const reuseOmpPrCheckout = async (ctx: Context, target: Target, listed: Worktree
     return null;
   }
   const headRef = await gitRun(ctx.root, 'config', '--get', `branch.${branch}.ompPrHeadRef`);
-  return headRef.status !== 0 || headRef.stdout.trim() === target.branch ? { branch, path: found.path, status: 'reused' } : null;
+  return headRef.status !== 0 || headRef.stdout.trim() === target.branch ? { branch, carried: [], owner: 'omp', path: found.path, status: 'reused' } : null;
 };
 
 const placeWorktree = async (ctx: Context, target: Target, placement: Placement): Promise<Placed> => {
@@ -333,11 +392,12 @@ const placeWorktree = async (ctx: Context, target: Target, placement: Placement)
       return reused;
     }
     await addWorktree(ctx, target, placement.isNew, ctx.clone);
-    return { branch: target.branch, path: target.path, status: 'created' };
+    await updateSubmodules(ctx, target.path);
+    return { branch: target.branch, carried: [], owner: 'tern', path: target.path, status: 'created' };
   }
   const samePath = isUnder(existing.path, target.path) && isUnder(target.path, existing.path);
   if (samePath || worktreeOwner(ctx.wtRoot, ctx.root, existing.path) === 'omp') {
-    return { branch: target.branch, path: samePath ? target.path : existing.path, status: 'reused' };
+    return { branch: target.branch, carried: [], owner: samePath ? 'tern' : 'omp', path: samePath ? target.path : existing.path, status: 'reused' };
   }
   if (existing.main) {
     throw new CliError('branch_in_main_checkout', `${target.branch} is checked out in the main checkout at ${existing.path}`, { existing: existing.path });
@@ -348,15 +408,8 @@ const placeWorktree = async (ctx: Context, target: Target, placement: Placement)
       target: target.path,
     });
   }
-  await relocate(ctx, target, existing);
-  return { branch: target.branch, path: target.path, status: 'relocated' };
-};
-
-const updateSubmodules = async (ctx: Context, dir: string): Promise<void> => {
-  const result = await gitRun(dir, 'submodule', 'update', '--init', '--recursive');
-  if (result.status !== 0) {
-    ctx.warnings.push(`submodule update failed: ${result.stderr.trim()}`);
-  }
+  const carried = await relocate(ctx, target, existing);
+  return { branch: target.branch, carried, owner: 'tern', path: target.path, status: 'relocated' };
 };
 
 const openTab = async (ctx: Context, target: Target): Promise<CreatedTab> => {
@@ -384,6 +437,39 @@ const tryOpenTab = async (ctx: Context, target: Target): Promise<CreatedTab | nu
   }
 };
 
+/** The setup commands of the repository as one line, with ` && ` between them. Null unless the worktree is new and the options file lists commands for the name with owner of its GitHub origin. */
+const setupLine = async (ctx: Context, status: CreateStatus): Promise<string | null> => {
+  const repoRef = status === 'created' ? await originRepo(ctx.root) : null;
+  const commands = repoRef === null ? [] : (loadConfig().setup[nameWithOwner(repoRef).toLowerCase()] ?? []);
+  return commands.length === 0 ? null : commands.join(' && ');
+};
+
+/**
+ * Types `line` into the tab that `create` opened when its shell shows the prompt. Gives true when it typed the line. Without a tab it adds no warning: the caller types the line.
+ * A tab that was open before, no prompt in {@link SETUP_PROMPT_SECONDS} and a Tern failure each add a warning and keep the worktree.
+ */
+const typeSetup = async (ctx: Context, line: string, tab: CreatedTab | null): Promise<boolean> => {
+  if (tab === null) {
+    return false;
+  }
+  if (!tab.opened) {
+    ctx.warnings.push('setup not run: the tab was open before');
+    return false;
+  }
+  try {
+    if (!(await waitForPrompt(tab.block, SETUP_PROMPT_SECONDS))) {
+      ctx.warnings.push(`setup not run: no shell prompt in ${SETUP_PROMPT_SECONDS} s`);
+      return false;
+    }
+    await typeInto(tab.block, line);
+    return true;
+  } catch (error) {
+    // SAFETY: `waitForPrompt` and `typeInto` throw a CliError only.
+    ctx.warnings.push(`setup not run: ${(error as CliError).message}`);
+    return false;
+  }
+};
+
 /**
  * `create --repo <dir> (--branch <name> [--new] | --pr <number>) [--relocate] [--no-tab]`:
  * creates or reuses the tern-managed worktree of a branch or pull request, and opens or focuses its Tern tab.
@@ -395,33 +481,14 @@ export const run = async (args: string[]): Promise<CreateResult> => {
   const { repo, source } = checkOptions(options);
   const root = await requireRepoRoot(repo);
   const [wtRoot, probe, withOrigin] = await Promise.all([worktreeRoot(), ompSettings(root), hasOrigin(root)]);
-  const warnings = probe.warning === null ? [] : [probe.warning];
+  const fetchWarning = withOrigin ? await fetchOrigin(root, true) : null;
+  const warnings = [probe.warning, fetchWarning].filter(warning => warning !== null);
   const clone = probe.settings?.clone === true ? probe.omp : null;
-  const ctx: Context = { carry: null, clone, repoName: path.basename(root), root, warnings, withOrigin, wtRoot };
-  if (ctx.withOrigin) {
-    const fetchWarning = await fetchOrigin(root, true);
-    if (fetchWarning !== null) {
-      ctx.warnings.push(fetchWarning);
-    }
-  }
+  const ctx: Context = { clone, fetchWarning, repoName: path.basename(root), root, warnings, withOrigin, wtRoot };
   const { isNew, target } = await sourceTarget(ctx, source);
-  let placed: Placed;
-  let carried: string[] = [];
-  try {
-    placed = await placeWorktree(ctx, target, { isNew, relocate: options.relocate });
-    if (placed.status !== 'reused') {
-      await updateSubmodules(ctx, placed.path);
-    }
-    if (ctx.carry !== null) {
-      carried = unstage(ctx, ctx.carry, placed.path);
-    }
-  } catch (error) {
-    if (ctx.carry === null) {
-      throw error;
-    }
-    // SAFETY: the steps after staging throw a CliError, or an Error from node:fs.
-    throw withStaging(error as Error, ctx.carry.staging);
-  }
+  const placed = await placeWorktree(ctx, target, { isNew, relocate: options.relocate });
   const tab = options['no-tab'] ? null : await tryOpenTab(ctx, { ...target, branch: placed.branch, path: placed.path });
-  return { branch: placed.branch, carried, path: placed.path, repo: root, status: placed.status, tab, warnings: ctx.warnings };
+  const line = await setupLine(ctx, placed.status);
+  const setup = line === null ? null : { line, typed: await typeSetup(ctx, line, tab) };
+  return { branch: placed.branch, carried: placed.carried, owner: placed.owner, path: placed.path, repo: root, setup, status: placed.status, tab, warnings: ctx.warnings };
 };

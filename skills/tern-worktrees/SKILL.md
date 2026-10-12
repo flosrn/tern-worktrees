@@ -37,29 +37,41 @@ When omp is installed and the omp setting `worktree.clone` is true in the reposi
 - `--repo`: a dir in the repository.
 - `--branch`: a local branch or a branch on `origin`. A name that git rejects gives `bad_args`.
 - `--new`: make `--branch` a new branch from `origin/<default>`. When the branch is local or on `origin`, `--new` gives `bad_args`, also when the branch has a worktree.
-- `--pr`: the branch of a pull request. A pull request from a fork gets the branch `pr-<number>`.
-- `--relocate`: move the worktree of the branch into the worktree root from a path that is not in the root. Pass it only after the user says yes. When git refuses the move, `create` makes the worktree again in the root with plain `git worktree add`, but only when the first worktree has no work to lose: a changed file, a new file that git does not track, or a submodule commit that no remote holds. Ignored files that are hard to rebuild (see `remove`) are copied into the new worktree.
-- `--no-tab`: skip the tab.
+- `--pr`: the branch of a pull request. A pull request from a fork gets the branch `pr-<number>`. When the head branch of a pull request from the same repository is not local and not on `origin`, `--pr` gives `git_failed` with the fetch failure when the fetch of `origin` failed, else `bad_args`: `origin` does not have the branch, for example because it was deleted.
+- `--relocate`: move the worktree of the branch into the worktree root from a path that is not in the root. Pass it only after the user says yes. When git refuses the move, `create` makes the worktree again in the root with plain `git worktree add`. Of the work to lose in the first worktree, only a change, a new file that git does not track or a submodule commit that no remote holds stops it with `dirty_worktree`. Hard-to-rebuild files (see `remove`) do not stop it: `create` copies them into the new worktree.
+- `--no-tab`: skip the tab. `create` then types no setup commands: `setup.typed` is false, and the caller types `setup.line`.
 
-Output: `{"path", "branch", "repo", "status", "carried", "tab", "warnings"}`.
+For a new worktree, `create` opens the tab and waits a maximum of 30 s for its shell prompt. Then it types the setup commands of the repository into the tab (see [Options file](#options-file)). The commands run in the tab, and `create` does not wait for them to complete.
 
+Output: `{"path", "branch", "repo", "owner", "status", "carried", "setup", "tab", "warnings"}`.
+
+- `owner`: `tern` for a tern-managed worktree, `omp` for an omp-owned worktree, as in `list`. A reused omp-owned worktree and the omp checkout of a pull request give `omp`.
 - `status`: `created`, `reused` or `relocated`. For an omp-owned worktree, `reused` with its `path`.
 - `carried`: the ignored files, as paths in the worktree, that a rebuilt relocation copied into the new worktree. Empty otherwise. When the new worktree has a file at that path, the copy stays in the temporary folder, with a `not carried:` warning.
+- `setup`: `{"line", "typed"}`, or null. `line` holds the setup commands of the repository, with `&&` between them. `typed` is true when `create` typed the line into the tab it opened. `setup` is null unless `status` is `created`, `origin` is a GitHub URL, and the options file lists commands for its name with owner. When the tab was open before, no prompt shows in 30 s, or Tern fails, `typed` is false with a `setup not run:` warning, and the worktree stays.
 - `tab`: `{"session", "block", "opened"}`, or null with a `tab not opened:` warning. `opened` is false when `create` focused a tab that was open before.
 
 ### `remove`
 
 `tern-wt remove <path> [--force] [--keep-tab]`
 
-Removes the tern-managed worktree at `<path>`, closes its tabs, then applies the teardown policy to its branch. An omp-owned worktree gives `not_managed`. `--keep-tab` keeps the tabs open. A worktree with a changed file, a new file that git does not track, a submodule commit that no remote holds, or an ignored file that is hard to rebuild gives `dirty_worktree` and stays. An ignored file is build or install output when a part of its path is `node_modules`, `dist`, `build`, `coverage`, `.DS_Store`, `.cache`, `.next`, `.nuxt`, `.output` or `.turbo`. That output goes with the worktree. Each other ignored file, for example `.env`, is hard to rebuild. An ignored file with the same bytes as the file at the same path in the main checkout, or in the same submodule of the main checkout, is a copy and goes with the worktree. `--force` deletes all of them.
+Removes the tern-managed worktree at `<path>`, closes its tabs, then applies the teardown policy to its branch. An omp-owned worktree gives `not_managed`. `--keep-tab` keeps the tabs open. A worktree with a changed file, a new file that git does not track, a submodule commit that no remote holds, or an ignored file that is hard to rebuild gives `dirty_worktree` and stays. `remove` checks for that work before git removes anything. A different refusal of git, for example for a locked worktree, gives `git_failed` with the message of git, and the worktree stays. An ignored file is build or install output when a part of its path is `node_modules`, `dist`, `build`, `coverage`, `.DS_Store`, `.cache`, `.next`, `.nuxt`, `.output` or `.turbo`. That output goes with the worktree. Each other ignored file, for example `.env`, is hard to rebuild. An ignored file with the same bytes as the file at the same path in the main checkout, or in the same submodule of the main checkout, is a copy and goes with the worktree. `--force` deletes all of them.
 
-Output: `{"removed", "branch", "branchDeleted", "closedBlocks", "warnings"}`. `branch` is null for a detached `HEAD`. A branch that the policy keeps adds the warning `kept local branch <branch>: not merged`, and a failed delete adds `branch <branch> not deleted: <reason>`. That warning comes first in `warnings`.
+Output: `{"removed", "repo", "branch", "branchDeleted", "branchKept", "closedBlocks", "warnings"}`. `repo` is the main checkout of the removed worktree. `branch` is null for a detached `HEAD`. `branchKept` tells why `remove` kept the branch: `policy` for the teardown policy `worktree`, `not_merged` for a branch that is not merged, also when the merge check failed, and `not_deleted` when `git branch -D` failed. It is null when `remove` deleted the branch, and for a detached `HEAD`. A branch that the policy keeps because it is not merged adds the warning `kept local branch <branch>: not merged`, and a failed delete adds `branch <branch> not deleted: <reason>`. That warning comes first in `warnings`.
 
 ### `list`
 
-`tern-wt list [--repo <dir>]`
+`tern-wt list [--repo <dir>] [--all]`
 
-Output: `{"root", "worktrees": [{"path", "repo", "branch", "dirty"}], "warnings"}`. `list` shows the tern-managed worktrees only. With `--repo`, `list` shows only the worktrees of the repository that contains `<dir>`.
+- `--all`: also list the omp-owned worktrees, at all depths in the worktree root. `list` does not look in a worktree or a main checkout.
+
+Output: `{"root", "worktrees": [{"path", "repo", "branch", "dirty", "changed", "owner"}]}`. Without `--all`, `list` shows the tern-managed worktrees only. With `--repo`, `list` shows only the worktrees of the repository that contains `<dir>`.
+
+- `repo`: the main checkout.
+- `branch`: null for a detached `HEAD`.
+- `changed`: the number of files with changes. Each changed or new file counts one time, and submodule changes also count.
+- `dirty`: true when `changed` is more than 0.
+- `owner`: `tern` for a tern-managed worktree and `omp` for an omp-owned worktree.
 
 ### `branches`
 
@@ -67,7 +79,7 @@ Output: `{"root", "worktrees": [{"path", "repo", "branch", "dirty"}], "warnings"
 
 - `--offline`: read only local refs. It does not run `git fetch --prune origin`, does not list the open pull requests, and does not ask GitHub for the default branch. `prs` is `[]`, and `branches` has the branches on `origin` as of the last fetch. When `origin/HEAD` is unset, `default` is the current branch.
 
-Output: `{"repo", "name", "default", "branches", "prs": [{"number", "title", "branch", "fork"}], "worktrees": [{"branch", "path", "managed", "owner"}], "warnings"}`. `owner` is `tern` for a tern-managed worktree, `omp` for an omp-owned worktree, and null for a worktree that is not in the worktree root. `managed` is true for a tern-managed worktree. `branches` is sorted by the date of the last commit on each branch, newest first. It has the local branches and the branches on `origin`, each once. When `gh pr list` fails, `prs` is `[]` and `warnings` has an entry that starts with `pr list failed:`. The Tern window uses that prefix to find a failed pull request list.
+Output: `{"repo", "name", "default", "branches", "prs": [{"number", "title", "branch", "fork"}], "prsFailed", "worktrees": [{"branch", "path", "main", "managed", "owner"}], "warnings"}`. `main` is true for the main checkout. `owner` is `tern` for a tern-managed worktree, `omp` for an omp-owned worktree, and null for a worktree that is not in the worktree root. `managed` is true for a tern-managed worktree. `branches` is sorted by the date of the last commit on each branch, newest first. It has the local branches and the branches on `origin`, each once. `prsFailed` is true when `gh pr list` failed. Then `prs` is `[]` and `warnings` has an entry that starts with `pr list failed:`. `prsFailed` is false with `--offline`, and when `origin` is not a GitHub repository.
 
 ### `resolve`
 
@@ -93,7 +105,13 @@ Clones the GitHub repository to `<cloneRoot>/<owner>/<name>`, or reuses the clon
 
 Makes a GitHub repository with a README, then clones it. It checks the clone path first, so a `path_conflict` makes no repository. The name with owner follows the rule of `clone`. Run it only when the user asks for a new repository. Output: `{"root", "nameWithOwner"}`.
 
-### `setup`
+### `config`
+
+`tern-wt config`
+
+Output: the options file with each default filled in, `{"teardown", "cloneRoot", "hotkeys": {"new"}, "setup"}`. See [Options file](#options-file). An invalid file gives `config_invalid`, as for each command.
+
+### `tern-wt setup`
 
 `tern-wt setup`
 
@@ -101,20 +119,20 @@ Links the Tern plugin, `~/.local/bin/tern-wt` and this skill to the checkout. A 
 
 ## Error codes
 
-| Code                        | Added fields         | Next step                                                                                                                                                                            |
-| --------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `bad_args`                  |                      | Fix the arguments from the message.                                                                                                                                                  |
-| `config_invalid`            |                      | Show the user the message, which names the file and the key.                                                                                                                         |
-| `not_a_repo`                |                      | Pass a dir in a git repository.                                                                                                                                                      |
-| `not_managed`               |                      | `remove` acts only on a tern-managed worktree, not on an omp-owned one. Get the paths from `list`.                                                                                   |
-| `path_conflict`             | `path`               | Show the user `path`. Keep it as it is.                                                                                                                                              |
-| `branch_in_main_checkout`   | `existing`           | Tell the user. The main checkout holds the branch.                                                                                                                                   |
-| `worktree_exists_elsewhere` | `existing`, `target` | Ask the user, then run `create` again with `--relocate`.                                                                                                                             |
-| `dirty_worktree`            | `existing`, `files`  | Show the user `files`. An entry `!! <path>` is an ignored file that is hard to rebuild. Relocate and `remove` keep a worktree with work to lose. For `remove`, ask before `--force`. |
-| `git_failed`                |                      | Show the user the message. For `remove`, ask before `--force`.                                                                                                                       |
-| `gh_failed`                 |                      | Show the user the message. Check `gh auth status`.                                                                                                                                   |
-| `omp_failed`                |                      | Show the user the message. omp is installed but `omp config list --json` failed, so the worktree root is unknown. Fix omp, then run the command again.                               |
-| `tern_failed`               |                      | Show the user the message. Check that Tern runs.                                                                                                                                     |
+| Code                        | Added fields                                    | Next step                                                                                                                                                                                                                                                                                                                                                                                                     |
+| --------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bad_args`                  |                                                 | Fix the arguments from the message.                                                                                                                                                                                                                                                                                                                                                                           |
+| `config_invalid`            |                                                 | Show the user the message, which names the file and the key.                                                                                                                                                                                                                                                                                                                                                  |
+| `not_a_repo`                |                                                 | Pass a dir in a git repository.                                                                                                                                                                                                                                                                                                                                                                               |
+| `not_managed`               |                                                 | `remove` acts only on a tern-managed worktree, not on an omp-owned one. Get the paths from `list`.                                                                                                                                                                                                                                                                                                            |
+| `path_conflict`             | `path`                                          | Show the user `path`. Keep it as it is.                                                                                                                                                                                                                                                                                                                                                                       |
+| `branch_in_main_checkout`   | `existing`                                      | Tell the user. The main checkout holds the branch.                                                                                                                                                                                                                                                                                                                                                            |
+| `worktree_exists_elsewhere` | `existing`, `target`                            | Ask the user, then run `create` again with `--relocate`.                                                                                                                                                                                                                                                                                                                                                      |
+| `dirty_worktree`            | `existing`, `files`, `changes`, `hardToRebuild` | Show the user `files`. An entry `!! <path>` is an ignored file that is hard to rebuild. `changes` holds the entries without `!! `, and `hardToRebuild` holds the paths of the `!! ` entries. Relocate stops only on `changes` and gives an empty `hardToRebuild`, because it carries the hard-to-rebuild files into the new worktree. `remove` stops on all work to lose. For `remove`, ask before `--force`. |
+| `git_failed`                |                                                 | Show the user the message. For `remove`, ask before `--force`.                                                                                                                                                                                                                                                                                                                                                |
+| `gh_failed`                 |                                                 | Show the user the message. Check `gh auth status`.                                                                                                                                                                                                                                                                                                                                                            |
+| `omp_failed`                |                                                 | Show the user the message. omp is installed but `omp config list --json` failed, so the worktree root is unknown. Fix omp, then run the command again.                                                                                                                                                                                                                                                        |
+| `tern_failed`               |                                                 | Show the user the message. Check that Tern runs.                                                                                                                                                                                                                                                                                                                                                              |
 
 An error from `create` after a rebuilt relocation copied the ignored files adds the field `staging`: the temporary folder that keeps those copies. The message names it. Tell the user, and do not delete that folder.
 
@@ -130,4 +148,5 @@ An invalid file makes each command fail with `config_invalid`. The keys:
 
 - `teardown`: the teardown policy. It sets what `remove`, and the close of a worktree tab, do to the branch. `worktree` keeps the branch. `worktree+merged-branch`, the default, deletes a merged branch. `worktree+branch` deletes the branch. A branch is merged when it is an ancestor of `origin/<default>`, or when its tip is the head commit of a merged pull request or an ancestor of that commit.
 - `cloneRoot`: the dir for `clone` and `new-repo`, an absolute path or a path that starts with `~`. The default is `~/Developer`.
-- `hotkeys.new`: the Tern key chords that open the picker for a new worktree tab. The default is `["cmd+shift+w"]`.
+- `hotkeys.new`: the Tern key chords that open the branch picker. The default is `["cmd+shift+w"]`.
+- `setup`: the setup commands of each repository, for example `{"virtusize/aoyama": ["npm ci", "npm run build"]}`. The key is the name with owner of the repository. Uppercase and lowercase letters in the key are the same. The value is a list of shell commands without line breaks, and an empty list runs nothing. The default is `{}`. For a new worktree only, `create` and the Tern plugin type the commands of its repository into the new worktree tab as one line, with `&&` between them.

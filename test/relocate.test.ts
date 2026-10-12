@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { run } from '../src/commands/create.ts';
-import { ghFixture, git, ignoreGlobally, ompLog, tempDir, tmpRepo, useGithubOrigin, useOmp, useSandbox } from './helpers.ts';
+import { cliJson, contract, ghFixture, git, ignoreGlobally, ompLog, tempDir, tmpRepo, useGithubOrigin, useOmp, useSandbox } from './helpers.ts';
 import type { RepoFixture, Sandbox } from './helpers.ts';
 
 const SUBMODULE_REFUSED = 'recreated: git worktree move refused (fatal: working trees containing submodules cannot be moved or removed)';
@@ -41,6 +41,45 @@ const pushSubmoduleBranch = async (branch: string): Promise<void> => {
   await git(repo.dir, 'branch', '--quiet', '-D', branch);
 };
 
+const submoduleWorktree = async (): Promise<string> => {
+  const old = await outsideWorktree('origin/feature/s', '--track', '-b', 'feature/s');
+  await git(old, '-c', 'protocol.file.allow=always', 'submodule', '--quiet', 'update', '--init');
+  return old;
+};
+
+const expectKept = async (old: string, changes: string[]): Promise<void> => {
+  await expect(run(['--repo', repo.dir, '--branch', 'feature/s', '--relocate', '--no-tab'])).rejects.toMatchObject({
+    code: 'dirty_worktree',
+    extra: { changes, existing: old, files: changes, hardToRebuild: [] },
+    message: `${old} has work that recreating it would lose`,
+  });
+  await expect(currentBranch(old)).resolves.toBe('feature/s');
+  expect(existsSync(managedPath('feature-s'))).toBeFalsy();
+};
+
+/**
+ * Relocates a locked submodule worktree with an ignored `.env` of mode 000, so that copying the file out fails.
+ * Gives the settled run and the path of the first worktree.
+ */
+const failCopyOut = async (): Promise<{ failure: Promise<unknown>; old: string }> => {
+  await ignoreGlobally('.env');
+  const old = await submoduleWorktree();
+  await git(repo.dir, 'worktree', 'lock', '--reason', 'on usb', old);
+  const env = path.join(old, '.env');
+  writeFileSync(env, 'SECRET=1\n', { mode: 0o000 });
+  const failure = run(['--repo', repo.dir, '--branch', 'feature/s', '--relocate', '--no-tab']).finally(() => {
+    chmodSync(env, 0o600);
+  });
+  await Promise.allSettled([failure]);
+  return { failure, old };
+};
+
+const expectLockedKept = async (old: string): Promise<void> => {
+  await expect(currentBranch(old)).resolves.toBe('feature/s');
+  await expect(git(repo.dir, 'worktree', 'list', '--porcelain')).resolves.toContain('locked on usb');
+  expect(existsSync(managedPath('feature-s'))).toBeFalsy();
+};
+
 const prView = (fork: boolean): void => {
   ghFixture(
     ['pr', 'view', '7', '--repo', 'virtusize/aoyama', '--json', 'number,headRefName,isCrossRepository'],
@@ -75,7 +114,12 @@ describe('create command', () => {
 
     it('moves a worktree into the root', async () => {
       const old = await outsideWorktree('origin/feature/x', '--track', '-b', 'feature/x');
-      await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--relocate', '--no-tab'])).resolves.toMatchObject({ status: 'relocated', warnings: [] });
+      await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--relocate', '--no-tab'])).resolves.toMatchObject({
+        carried: [],
+        owner: 'tern',
+        status: 'relocated',
+        warnings: [],
+      });
       expect(existsSync(old)).toBeFalsy();
       await expect(currentBranch(managedPath('feature-x'))).resolves.toBe('feature/x');
     });
@@ -140,28 +184,15 @@ describe('create command', () => {
         await pushSubmoduleBranch('feature/s');
       });
 
-      const submoduleWorktree = async (): Promise<string> => {
-        const old = await outsideWorktree('origin/feature/s', '--track', '-b', 'feature/s');
-        await git(old, '-c', 'protocol.file.allow=always', 'submodule', '--quiet', 'update', '--init');
-        return old;
-      };
-
-      const expectKept = async (old: string, files: string[]): Promise<void> => {
-        await expect(run(['--repo', repo.dir, '--branch', 'feature/s', '--relocate', '--no-tab'])).rejects.toMatchObject({
-          code: 'dirty_worktree',
-          extra: { existing: old, files },
-          message: `${old} has work that recreating it would lose`,
-        });
-        await expect(currentBranch(old)).resolves.toBe('feature/s');
-        expect(existsSync(managedPath('feature-s'))).toBeFalsy();
-      };
-
       it('stops on a dirty worktree that git refuses to move, and stages nothing', async () => {
         await ignoreGlobally('.env');
         const old = await submoduleWorktree();
         writeFileSync(path.join(old, 'junk.txt'), 'x\n');
         writeFileSync(path.join(old, '.env'), 'SECRET=1\n');
         await expectKept(old, ['?? junk.txt']);
+        await expect(cliJson(['create', '--repo', repo.dir, '--branch', 'feature/s', '--relocate', '--no-tab'])).resolves.toStrictEqual(
+          contract('relocate-dirty', { worktree: old }),
+        );
         expect(existsSync(path.join(old, 'junk.txt'))).toBeTruthy();
         expect(stagingDirs()).toStrictEqual([]);
         await expect(git(repo.dir, 'worktree', 'list', '--porcelain')).resolves.not.toContain('locked');
@@ -294,6 +325,26 @@ describe('create command', () => {
         expect(existsSync(old)).toBeFalsy();
         await expect(currentBranch(managedPath('feature-s'))).resolves.toBe('feature/s');
         expect(existsSync(path.join(managedPath('feature-s'), 'sub', 'README.md'))).toBeTruthy();
+      });
+
+      it('initialises the submodules of a worktree that git moves', async () => {
+        allowFileProtocol();
+        await outsideWorktree('origin/feature/s', '--track', '-b', 'feature/s');
+        await expect(run(['--repo', repo.dir, '--branch', 'feature/s', '--relocate', '--no-tab'])).resolves.toMatchObject({
+          carried: [],
+          status: 'relocated',
+          warnings: [],
+        });
+        expect(existsSync(path.join(managedPath('feature-s'), 'sub', 'README.md'))).toBeTruthy();
+      });
+
+      it('keeps the old worktree, its lock and the staging dir when copying a file out fails', async () => {
+        const { failure, old } = await failCopyOut();
+        expect(stagingDirs()).toHaveLength(1);
+        const stagingDir = path.join(sandbox.tmp, stagingDirs()[0]);
+        await expect(failure).rejects.toMatchObject({ code: 'git_failed', extra: { staging: stagingDir } });
+        await expect(failure).rejects.toThrow(`; the carried files stay in ${stagingDir}`);
+        await expectLockedKept(old);
       });
 
       it('recreates through plain git in omp clone mode, so the old ignored files win over the copies of the main checkout', async () => {

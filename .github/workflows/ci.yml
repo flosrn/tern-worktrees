@@ -27,15 +27,19 @@ jobs:
         run: |
           gh release download --repo JohnnyMorganz/StyLua --pattern stylua-linux-x86_64.zip --dir "$RUNNER_TEMP/luau"
           gh release download --repo JohnnyMorganz/luau-lsp --pattern luau-lsp-linux-x86_64.zip --dir "$RUNNER_TEMP/luau"
+          gh release download v0.11.0 --repo lune-org/lune --pattern lune-0.11.0-linux-x86_64.zip --dir "$RUNNER_TEMP/luau"
           mkdir -p "$HOME/.local/bin"
           unzip -o "$RUNNER_TEMP/luau/stylua-linux-x86_64.zip" -d "$HOME/.local/bin"
           unzip -o "$RUNNER_TEMP/luau/luau-lsp-linux-x86_64.zip" -d "$HOME/.local/bin"
-          chmod +x "$HOME/.local/bin/stylua" "$HOME/.local/bin/luau-lsp"
+          unzip -o "$RUNNER_TEMP/luau/lune-0.11.0-linux-x86_64.zip" -d "$HOME/.local/bin"
+          chmod +x "$HOME/.local/bin/stylua" "$HOME/.local/bin/luau-lsp" "$HOME/.local/bin/lune"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - run: vp check
 
       - run: vp run check:luau
+
+      - run: vp run test:luau
 
       - run: vp run lint:prose
 
@@ -59,6 +63,7 @@ jobs:
 
   mutation:
     name: Mutation testing
+    if: ${{ github.ref == 'refs/heads/main' || github.base_ref == 'main' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -136,7 +141,7 @@ jobs:
   mutation-comment:
     name: Mutation report (no re-run)
     needs: mutation
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && needs.mutation.result != 'skipped' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
     continue-on-error: true
     runs-on: ubuntu-latest
     permissions:

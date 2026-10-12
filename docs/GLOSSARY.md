@@ -26,9 +26,25 @@ _Avoid_: Copy mode, fast checkout
 A Tern tab with its panes in a managed worktree.
 _Avoid_: Branch tab
 
+**Repository session**:
+The one Tern session that holds the tabs of one repository: its main checkout and its worktree tabs. The plugin opens each worktree tab there, and makes the session when the repository has none.
+_Avoid_: Project session, workspace
+
 **Worktree row**:
 A row in the Tern command palette that opens the worktree tab of one branch or pull request.
 _Avoid_: Palette entry, worktree command
+
+**Worktree variables**:
+The environment variables `TERN_WT_PATH`, `TERN_WT_MAIN` and `TERN_WT_BRANCH` of a shell that starts in a worktree in the worktree root. They name the worktree, its main checkout and its branch.
+_Avoid_: Worktree env, `TERN_WT_ROOT`
+
+**Worktree segment**:
+The part of the Tern status line that shows the branch of the worktree of the pane with the focus. When that worktree has changed files, the segment also shows the number of changed files.
+_Avoid_: Status badge, branch indicator
+
+**Worktree index**:
+The list of each worktree in the worktree root, with its main checkout, its branch and its number of changed files. The plugin keeps the list in Tern for the worktree variables and the worktree segment.
+_Avoid_: Worktree cache, worktree map
 
 **Relocate**:
 To move the worktree of a branch into the worktree root from a directory that is not in the root. The worktree then is a managed worktree. When the worktree must be made again, the files that are hard to rebuild come along.
@@ -37,6 +53,10 @@ _Avoid_: Adopt, migrate, import
 **Hard-to-rebuild file**:
 An ignored file that no build or install makes again, for example a `.env` file. Its loss counts as work to lose. Ignored build output and installed packages are not hard to rebuild. At teardown, a copy with the bytes of the file at the same path in the main checkout also does not count.
 _Avoid_: Secret file, precious file
+
+**Work to lose**:
+The changes, the new files that git does not track, the submodule commits that no remote holds, and the hard-to-rebuild files that a delete of a worktree destroys.
+_Avoid_: Dirty files, losses
 
 ### Teardown
 
@@ -63,13 +83,17 @@ The form `<owner>/<name>` that identifies a GitHub repository, for example in `c
 _Avoid_: Full name, repo path
 
 **Options file**:
-The file of user settings for the plugin: the teardown policy, the clone root and the hotkeys.
+The file of user settings for the plugin: the teardown policy, the clone root, the hotkeys and the setup commands.
 _Avoid_: Config, settings file
+
+**Setup commands**:
+The shell commands that the `setup` key of the options file lists for one repository, by its name with owner. They run in the worktree tab of each new worktree of that repository, where the user sees them and can stop them.
+_Avoid_: Setup hook, post-create script, setup script
 
 **Repo picker**:
 The list from which the user selects a repository: one open in a session, one on GitHub, or a new one.
 _Avoid_: Project picker
 
 **Branch picker**:
-The list of the branches and pull requests of one repository. The user selects one, or types the name of a new branch.
+The list of the branches and pull requests of one repository. The user selects one, or selects `New branch…` and types the name of a new branch.
 _Avoid_: Worktree picker

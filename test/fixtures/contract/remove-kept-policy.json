@@ -1,0 +1,9 @@
+{
+  "branch": "feature/x",
+  "branchDeleted": false,
+  "branchKept": "policy",
+  "closedBlocks": [],
+  "removed": "{{worktree}}",
+  "repo": "{{repo}}",
+  "warnings": []
+}
