@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.2.0](https://github.com/riicodespretty/tern-worktrees/releases/tag/0.2.0 "2026-10-13")
 
 ### Feature
 
@@ -24,6 +24,10 @@
 - Run `resolve` again when `create` answers, as the Carly `create` export did. This applies to a create from the branch picker, a worktree row, Relocate and New branch. Thus a repository session that opened after the window started gets the tab, and no second session opens for that repository. When the tab step raises, the plugin still refreshes the worktree rows and shows the `Created worktree` or `Reused worktree` toast with `tab not opened: <error>`. The `Setup not run: …` toast shows after the success toast, so the success toast no longer replaces it
 - Open no tab when the new tab of a new or empty session is missing. Before, the plugin tried a switch, a parked-pane move and one more tab
 - Give no `staging` in the Relocate error when the staging step fails and the second lock also fails. Before, that error named the staging folder
+
+### Config
+
+- Run the mutation tests in CI only for a push to `main` and for a pull request into `main`
 
 ## [0.1.0](https://github.com/riicodespretty/tern-worktrees/releases/tag/0.1.0 "2026-10-10")
 
