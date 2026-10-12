@@ -196,7 +196,7 @@ The repository uses git flow, with [git-flow-next](https://git-flow.sh/) (`brew 
 
 A release or a hotfix goes into `main` with a merge commit, and `main` then merges back into `develop`. The tag is the bare version, for example `0.1.0`, with no `v` prefix. The committed `.gitflow` file holds the settings: the branch names, the prefixes, merge commits on finish, and a push after finish. The first `git flow` command in a clone asks to copy `.gitflow` into the local configuration, and `git flow config sync` copies it again.
 
-`main` and `develop` accept a change only through a pull request with green `ci` and `Mutation testing` checks. The ruleset `main and develop` lets the `admin` and `maintain` roles of the repository bypass these rules, so that they can run `git flow release finish`.
+`main` and `develop` accept a change only through a pull request with green `ci` and `Mutation testing` checks. The `Mutation testing` job runs only for a push to `main` and for a pull request into `main`. For each other branch, CI skips it, and GitHub counts a skipped job as green. The ruleset `main and develop` lets the `admin` and `maintain` roles of the repository bypass these rules, so that they can run `git flow release finish`.
 
 To make a release:
 

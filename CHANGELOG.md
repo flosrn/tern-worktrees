@@ -25,6 +25,10 @@
 - Open no tab when the new tab of a new or empty session is missing. Before, the plugin tried a switch, a parked-pane move and one more tab
 - Give no `staging` in the Relocate error when the staging step fails and the second lock also fails. Before, that error named the staging folder
 
+### Config
+
+- Run the mutation tests in CI only for a push to `main` and for a pull request into `main`
+
 ## [0.1.0](https://github.com/riicodespretty/tern-worktrees/releases/tag/0.1.0 "2026-10-10")
 
 ### Feature
