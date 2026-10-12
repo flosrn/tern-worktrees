@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.2.0](https://github.com/riicodespretty/tern-worktrees/releases/tag/0.2.0 "2026-10-13")
 
 ### Feature
 
