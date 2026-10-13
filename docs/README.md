@@ -1,6 +1,6 @@
 # tern-worktrees
 
-`tern-worktrees` shows git worktrees as Tern tabs. This page tells how the plugin works and why. Install and usage are in the [README](https://github.com/riicodespretty/tern-worktrees/blob/main/README.md), and the terms are in the [glossary](GLOSSARY.md). Agents read three more docs: the [issue tracker](agents/issue-tracker.md), the [domain docs](agents/domain.md) and the [triage labels](agents/triage-labels.md).
+`tern-worktrees` shows git worktrees as Tern tabs. This page tells how the plugin works and why. Install and usage are in the [README](https://github.com/riicodespretty/tern-worktrees/blob/main/README.md), and the terms are in the [glossary](GLOSSARY.md). Agents read four more docs: the [issue tracker](agents/issue-tracker.md), the [domain docs](agents/domain.md), the [triage labels](agents/triage-labels.md) and the [architecture decision records](https://github.com/riicodespretty/tern-worktrees/tree/main/docs/adr).
 
 ## Why worktrees move from Orca to Tern
 
@@ -23,6 +23,8 @@ The omp skill and the Carly exports give agents the same CLI, so the user and th
 Each command prints one JSON object, and each failure has an error code. The window half reads the code to select its next step. For example, `worktree_exists_elsewhere` opens the Relocate picker. The CLI uses only `node:` built-in modules, so Bun runs it from source and Vitest tests the same files.
 
 `branches` lists the local branches and the branches on `origin`, each once, newest commit first. `branches --offline` reads only local refs: no fetch, no pull request list and no GitHub lookup of the default branch. The worktree rows use it, so most of their refreshes cost no network traffic.
+
+To find if a folder is the top folder of a checkout, `checkoutAt` in `src/git.ts` compares the path that git prints with the real path of that folder. Git prints real paths, with each symbolic link resolved, so a folder path that goes through a symbolic link is not equal to the path that git prints.
 
 ### The links of the CLI and the skill
 
@@ -50,9 +52,9 @@ When the main checkout has the branch, also the head branch of `create --pr`, `c
 
 `omp worktree clear` deletes each worktree in the root that omp sees as orphaned, also without `--all`, and `--all` deletes each one, all with no check for uncommitted changes. omp sees a live managed worktree as orphaned when git has `worktree.useRelativePaths=true`, or when the main checkout moved. The plugin cannot stop that, so the docs tell the user to run `omp worktree clear --dry-run` first.
 
-In clone mode, `create` runs `omp worktree add`, and the new worktree starts with copies of the ignored files of the main checkout, for example `.env`. omp sets no upstream, so for a new branch `create` first runs `git branch`, which applies `branch.autoSetupMerge` as `git worktree add -b` does, then lets omp check out that branch. Thus `--new` gets the same upstream in the two modes. The teardown skips an ignored file with the bytes of the file at the same path in the main checkout: it compares the sizes, then the bytes in fixed-size chunks, and stops at the first difference, so a large artifact does not load into memory. A rebuilt relocation uses plain `git worktree add`, because it copies the ignored files of the first worktree, and a clone puts the copies of the main checkout there first.
+In clone mode, `create` runs `omp worktree add`, and the new worktree starts with copies of the ignored files of the main checkout, for example `.env`. omp sets no upstream, so for a new branch `create` first runs `git branch`, which applies `branch.autoSetupMerge` as `git worktree add -b` does, then lets omp check out that branch. Thus `--new` gets the same upstream in the two modes. The teardown skips an ignored file with the bytes of the file at the same path in the main checkout: it compares the bytes in fixed-size chunks, and stops at the first difference, so a large artifact does not load into memory. A rebuilt relocation uses plain `git worktree add`, because it copies the ignored files of the first worktree, and a clone puts the copies of the main checkout there first.
 
-omp clones the files of the main checkout, also the `.git` file of each submodule. That file holds a relative path, for example `gitdir: ../../.git/modules/<name>`. In a linked worktree, `.git` is a file, so the path goes to no git folder: `git status` fails in the worktree and in the submodule, and `git submodule update` fails. Thus `create` reads the submodule paths from the `.gitmodules` files, at each depth, and finds each `.git` file that points to no git folder. It first copies `.git/modules` of the main checkout to `modules` in the git folder of the worktree, copy-on-write where the file system can. Only after that copy succeeds, it deletes the broken `.git` files. `git submodule update --init --recursive` then finds the git folder of each submodule, writes a correct `.git` file, and checks out the recorded commit. When the copy fails, `create` keeps the `.git` files, adds the warning `submodule repair failed: <error>`, and still runs `git submodule update`. `git submodule update` does not clone into a folder that has files. To get an empty folder, `create` must delete the files that the clone mode gives. `git submodule absorbgitdirs` needs a git folder that works. A copy of the git folders needs no fetch, and the files of the clone, also the ignored build output, stay. In plain git mode, no `.git` file is broken, so this step changes nothing.
+omp clones the files of the main checkout, also the `.git` file of each submodule. That file holds a relative path, for example `gitdir: ../../.git/modules/<name>`. In a linked worktree, `.git` is a file, so the path goes to no git folder: `git status` fails in the worktree and in the submodule, and `git submodule update` fails. Thus `create` reads the submodule paths from the `.gitmodules` files, at each depth, and finds each `.git` file that points to no git folder. It runs git for each `.gitmodules` file in the top folder of the worktree, because git fails in a folder with a broken `.git` file. It first copies `.git/modules` of the main checkout to `modules` in the git folder of the worktree, copy-on-write where the file system can. Only after that copy succeeds, it deletes the broken `.git` files. `git submodule update --init --recursive` then finds the git folder of each submodule, writes a correct `.git` file, and checks out the recorded commit. When the copy fails, `create` keeps the `.git` files, adds the warning `submodule repair failed: <error>`, and still runs `git submodule update`. `git submodule update` does not clone into a folder that has files. To get an empty folder, `create` must delete the files that the clone mode gives. `git submodule absorbgitdirs` needs a git folder that works. A copy of the git folders needs no fetch, and the files of the clone, also the ignored build output, stay. In plain git mode, no `.git` file is broken, so this step changes nothing.
 
 ### Worktree rows
 
@@ -127,7 +129,7 @@ Each tab with a pane in a managed worktree is a worktree tab. The window half ke
 
 A tab that the plugin did not open, for example a tab from `tern-wt create` in a shell, can be in a worktree that the index does not have. When a tab or pane opens, or a working directory changes, in a folder of the worktree root that the index does not have, the window half requests a `list --all`. The answer makes the tab a worktree tab. The update of the map after a `list --all` answer requests no `list --all`. Else a pane in `<root>/<repo>`, which is not a worktree, can start a new `list --all` each 2 s.
 
-When the window starts, the window half reads the root from the `root` field of `tern-wt list --all`, removes a trailing `/`, and keeps the last root in `tern.kv`. At load it cannot wait for the CLI, so it starts from the kept root. Without a kept root, it has no root until the first answer. The root is a rule of the CLI, so `TERN_WT_HOME` and `~/.tern-wt/worktrees` do not occur in the window half. Without a root, a path in the worktree root shows in full, not as `…/worktrees/<path>`, and a change of working directory requests no `list --all`. When `list` fails, for example with `omp_failed`, the window half keeps the root that it has.
+From each `tern-wt list --all` answer, the window half reads the root from the `root` field, removes a trailing `/`, and keeps the last root in `tern.kv`. At load it cannot wait for the CLI, so it starts from the kept root. Without a kept root, it has no root until the first answer. The root is a rule of the CLI, so `TERN_WT_HOME` and `~/.tern-wt/worktrees` do not occur in the window half. Without a root, a path in the worktree root shows in full, not as `…/worktrees/<path>`, and a change of working directory requests no `list --all`. When `list` fails, for example with `omp_failed`, the window half keeps the root that it has.
 
 Two paths catch the close of a worktree tab:
 
@@ -195,7 +197,15 @@ The `Created worktree` or `Reused worktree` toast shows when the tab opens, befo
 
 The gates are `vp check`, `vp run check:luau`, `vp run test:luau`, `vp run lint:prose` and `vp test --coverage`, with coverage at 100%. `vp run test.mutation` runs the mutation tests. It isolates `HOME`, the Tern config folder and the Tern daemon socket, so no mutant touches the real machine. `vp run smoke` tests the CLI against a Tern session daemon of its own, with its own config folder and socket, so it does not touch the Tern that you use.
 
+The smoke test gives its clone a GitHub URL for `origin`, so the options file gives the clone setup commands. `GIT_ALLOW_PROTOCOL` makes the fetch of that URL fail at once, and `create` then uses the `origin/feature/x` of the clone. Before `remove`, the smoke test sets `origin` back to the bare repository, so `remove` runs no `gh`.
+
 `vp run test:luau` runs the Luau tests in `test/luau/` with [lune](https://github.com/lune-org/lune). The tests load `window.luau` and `host.luau` without changes, with the fake `tern` in `test/luau/stub.luau`. Thus, Tern is not necessary for these tests. `vp run check:luau` also checks the types of these tests. Lune is necessary for the types of the `@lune/*` modules.
+
+The plugin and the CLI meet at the fixtures in `test/fixtures/contract/`. `argv.json` holds the arguments of each call that the plugin makes. Each other `<name>.json` file is the answer of one real CLI call: a TS test makes it through `main`, and the Luau tests give it to the plugin. The Luau tests compare the arguments that the plugin sends with `argv.json`, and `test/cli.test.ts` runs each list of arguments through `main` and fails on `bad_args`. Thus, when only one side changes the name of a flag, a test fails.
+
+The fake `tern` copies these behaviors of Tern, which no test on a live Tern examined: `layout:focus` does not switch the session. `layout:unpark` puts a parked pane only into a tab of the current session. `layout:move_to_new_tab` refuses a parked pane. `sessions:switch` gives the focus to the first pane of the first tab of the new session when the pane with the focus is not in that session. The `close_tab` command gives the focus to the first pane of the first tab of the current session. `close_tab` runs `tab_closed` before it returns. When a plugin runs the `close_tab` command, Tern does not run the `close_tab` override again.
+
+The fake `tern.kv.set` stores a JSON copy of the value, as Tern does, so two windows that share `kv` do not share a table.
 
 Homebrew has only lune 0.10.5. Install lune 0.11.0 from the `v0.11.0` release of `lune-org/lune`. Unzip the asset for your platform. Put the `lune` binary on your `PATH`.
 
@@ -208,6 +218,8 @@ A git command that writes in the `.git` folder of the checkout also loads the pl
 To run the plugin from a checkout, link it with `tern plugin link <checkout>`. The plugin then loads from the checkout, so `setup` points the two links at the checkout. After a subsequent `tern plugin install`, the load of the installed copy points the links back at it.
 
 `vp run lint:prose` runs vale from `@vvago/vale`. The install script of that package downloads the vale binary from the GitHub API with no token, and shared CI runners hit the limit for calls with no token, so the install failed with HTTP 403. `patches/@vvago%2Fvale@3.24.0.patch` sends `GITHUB_TOKEN` with that download when it is set, and the setup action gives each CI job its token. A vale update needs a new patch: run `bun patch @vvago/vale`, make the same change, and run `bun patch --commit node_modules/@vvago/vale`.
+
+The pre-commit hook runs the gate: `vp staged` formats and lints the staged files, then runs `vp check`, `vp run check:luau`, `vp run test:luau`, `vp run lint:prose`, `vp test --coverage` and `vp run test.mutation` in sequence. A failed step stops the commit. CI does not run for pull requests or for `develop`. The `ci` and `Mutation testing` jobs run for a push to `release/**` and `hotfix/**`, the branches that go into `main`.
 
 ### Releases
 
@@ -222,17 +234,18 @@ The repository uses git flow, with [git-flow-next](https://git-flow.sh/) (`brew 
 
 A release or a hotfix goes into `main` with a merge commit, and `main` then merges back into `develop`. The tag is the bare version, for example `0.1.0`, with no `v` prefix. The committed `.gitflow` file holds the settings: the branch names, the prefixes, merge commits on finish, and a push after finish. The first `git flow` command in a clone asks to copy `.gitflow` into the local configuration, and `git flow config sync` copies it again.
 
-`main` and `develop` accept a change only through a pull request with green `ci` and `Mutation testing` checks. The `Mutation testing` job runs only for a push to `main` and for a pull request into `main`. For each other branch, CI skips it, and GitHub counts a skipped job as green. The ruleset `main and develop` lets the `admin` and `maintain` roles of the repository bypass these rules, so that they can run `git flow release finish`.
+`main` and `develop` accept a change only through a pull request. A pull request into `develop` merges with the `squash` or `rebase` method and needs no check. A pull request into `main` merges with a merge commit, and needs green `ci` and `Mutation testing` checks on a head that contains the head of `main`. A check counts for the commit it ran on, so the push of the release branch gives the checks of its pull request. The ruleset `develop` lets the `admin` and `maintain` roles bypass its rules, so that `git flow release finish` can push the merge of `main` into `develop`. The ruleset `main` has no bypass.
 
 To make a release:
 
 1. Start the release branch from `develop`: `git flow release start 0.2.0`.
 2. Set `version` in `plugin.toml` to the new version.
 3. Add the entry of the new version at the top of `CHANGELOG.md`: `## [0.2.0](https://github.com/riicodespretty/tern-worktrees/releases/tag/0.2.0 "<date>")`.
-4. Commit with the subject `chore(release): 🔖 0.2.0`. Push the branch with `git push -u origin release/0.2.0`, and wait for green CI with `gh run watch`. The finish does not wait for CI.
-5. Finish: `git flow release finish -m 0.2.0`. It merges the release branch into `main` with a merge commit, tags the merge `0.2.0`, merges `main` back into `develop`, deletes the release branch, and pushes `main`, `develop` and the tag.
-6. Publish the GitHub release with the notes of the changelog entry: `gh release create 0.2.0 --verify-tag --title 0.2.0 --notes-file <notes>`.
+4. Commit with the subject `chore(release): 🔖 0.2.0`. Push the branch with `git push -u origin release/0.2.0`.
+5. Open the pull request into `main` with `gh pr create --base main --head release/0.2.0 --fill`. When the checks are green, merge it with `gh pr merge --merge`.
+6. Finish: `git checkout main && git pull`, then `git flow release finish 0.2.0 -m 0.2.0`. The merge of the pull request put the release in `main`, so the finish adds no commit to `main`. It tags the merge commit of the pull request `0.2.0`, merges `main` back into `develop`, deletes the release branch, and pushes `develop` and the tag.
+7. Publish the GitHub release with the notes of the changelog entry: `gh release create 0.2.0 --verify-tag --title 0.2.0 --notes-file <notes>`.
 
 A hotfix uses the same steps with `git flow hotfix start` and `git flow hotfix finish`. Its branch starts from `main`.
 
-The wiki publishes from `main`, so a wiki edit comes back as a pull request into `main`. The next finish merges it into `develop`.
+The wiki publishes from `main`, so a wiki edit comes back as a pull request into `main` from the `wiki-sync` branch. A push with the workflow token starts no workflow, so after each create or update of the pull request, `wiki-pull.yml` starts `ci.yml` on `wiki-sync` with `gh workflow run`. On `wiki-sync`, the `ci` and `Mutation testing` jobs skip, and GitHub counts a skipped job as green, so the pull request can merge without a test run. The next finish merges it into `develop`.

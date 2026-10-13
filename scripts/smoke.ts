@@ -6,9 +6,10 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { CreateResult } from '../src/commands/create.ts';
 import type { ListResult } from '../src/commands/list.ts';
+import { gitMust } from '../src/git.ts';
 import { run } from '../src/proc.ts';
-import { blocksUnder, ternBin } from '../src/tern.ts';
-import { buildRepo, gitWith } from './repo-fixture.ts';
+import { blocksUnder, ls, ternBin } from '../src/tern.ts';
+import { buildRepo } from './repo-fixture.ts';
 import type { RepoFixture } from './repo-fixture.ts';
 
 const CLI = path.resolve(import.meta.dirname, '..', 'bin', 'tern-wt');
@@ -35,17 +36,15 @@ const check = (ok: boolean, message: string): void => {
   }
 };
 
-const git = gitWith({ env });
-
 const cli = async <T>(...args: string[]): Promise<T> => {
-  const result = await run([CLI, ...args], { env });
+  const result = await run([CLI, ...args]);
   check(result.status === 0, `tern-wt ${args.join(' ')} exited ${result.status}: ${result.stdout.trim()}`);
   // SAFETY: the CLI prints one JSON object for each command.
   return JSON.parse(result.stdout) as T;
 };
 
 const makeClone = async (): Promise<RepoFixture> => {
-  const repo = await buildRepo(git, tempRoot, smokeName, 'smoke\n');
+  const repo = await buildRepo(gitMust, tempRoot, smokeName, 'smoke\n');
   await repo.pushBranch('feature/x');
   return repo;
 };
@@ -63,20 +62,14 @@ const waitFor = async (ready: () => boolean | Promise<boolean>, what: string, at
 };
 
 const waitForBlock = async (dir: string): Promise<void> => {
-  await waitFor(async () => {
-    const blocks = await blocksUnder(dir);
-    return blocks.length > 0;
-  }, `no block under ${dir}`);
+  await waitFor(async () => blocksUnder(await ls(), dir).length > 0, `no block under ${dir}`);
 };
 
-/**
- * The clone gets a GitHub origin URL, so the options file gives it setup commands. `GIT_ALLOW_PROTOCOL` makes the fetch of that URL fail immediately.
- * Then `create` uses the `origin/feature/x` that the clone has. `remove` runs with the bare origin again, so it runs no `gh`.
- */
+/** Runs `create` two times on `feature/x` of a clone with setup commands, then runs `list` and `remove`. */
 const smoke = async (): Promise<void> => {
   const repo = await makeClone();
   const clone = repo.dir;
-  await git(clone, 'remote', 'set-url', 'origin', 'https://github.com/smoke/twt-smoke.git');
+  await gitMust(clone, 'remote', 'set-url', 'origin', 'https://github.com/smoke/twt-smoke.git');
   writeFileSync(path.join(env.TERN_PLUGIN_DATA, 'config.json'), JSON.stringify({ setup: { 'smoke/twt-smoke': ['touch .setup-ran'] } }));
   const created = await cli<CreateResult>('create', '--repo', clone, '--branch', 'feature/x');
   check(created.status === 'created', `create: status ${created.status}, not created`);
@@ -93,10 +86,10 @@ const smoke = async (): Promise<void> => {
   check(reused.setup === null, `create again: setup ${JSON.stringify(reused.setup)}, not null`);
   const listed = await cli<ListResult>('list');
   check(listed.worktrees.length === 1, `list: ${listed.worktrees.length} worktrees, not 1`);
-  await git(clone, 'remote', 'set-url', 'origin', repo.origin);
+  await gitMust(clone, 'remote', 'set-url', 'origin', repo.origin);
   await cli('remove', created.path);
   check(!existsSync(created.path), `remove: ${created.path} still exists`);
-  const blocksLeft = await blocksUnder(created.path);
+  const blocksLeft = blocksUnder(await ls(), created.path);
   check(blocksLeft.length === 0, `remove: ${blocksLeft.length} blocks left under ${created.path}`);
 };
 

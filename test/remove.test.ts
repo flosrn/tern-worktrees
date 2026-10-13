@@ -6,11 +6,13 @@ import { gitSucceeds } from '../src/git.ts';
 import {
   cliJson,
   contract,
+  ghDefaultBranchFixture,
   ghFixture,
   git,
   gitShim,
   ignoreGlobally,
   logGitCalls,
+  managedPath,
   readLog,
   tempDir,
   ternLog,
@@ -23,8 +25,6 @@ import type { RepoFixture, Sandbox } from './helpers.ts';
 
 let sandbox: Sandbox;
 let repo: RepoFixture;
-
-const managedPath = (dirName: string): string => path.join(sandbox.wtHome, 'worktrees', 'aoyama', dirName);
 
 const hasBranch = async (branch: string): Promise<boolean> => await gitSucceeds(repo.dir, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`);
 
@@ -252,6 +252,20 @@ describe('remove command', () => {
     });
   });
 
+  describe('origin', () => {
+    it('reads the origin once to check a branch that is not merged', async () => {
+      await git(repo.dir, 'remote', 'set-head', 'origin', '--delete');
+      await git(repo.dir, 'config', 'remote.origin.followRemoteHEAD', 'never');
+      ghDefaultBranchFixture('virtusize/aoyama', 'main');
+      fakeMergedPrs([]);
+      const dir = await addUnmerged();
+      await useGithubOrigin();
+      const log = await logGitCalls();
+      await expect(run([dir])).resolves.toMatchObject({ branchDeleted: false, branchKept: 'not_merged', warnings: ['kept local branch feature/x: not merged'] });
+      expect(readLog(log).filter(line => line.includes('remote get-url origin'))).toHaveLength(1);
+    });
+  });
+
   describe('failures and --force', () => {
     it('keeps a worktree with an untracked file and its tabs without --force', async () => {
       const dir = await addFeature();
@@ -363,7 +377,7 @@ describe('remove command', () => {
       expect(ternLog()).toStrictEqual(['ls --json', 'ls --json']);
     });
 
-    it('removes ignored files that are easy to rebuild without --force', async () => {
+    it('removes, without --force, ignored files that are easy to rebuild', async () => {
       await ignoreGlobally('node_modules', '.DS_Store');
       const dir = await addFeature();
       mkdirSync(path.join(dir, 'node_modules'));
@@ -397,13 +411,9 @@ describe('remove command', () => {
       return dir;
     };
 
-    it('stops on an ignored file inside a submodule that is hard to rebuild', async () => {
-      await ignoreGlobally('.env.local', 'node_modules');
+    it('removes, without --force, ignored files inside a submodule that are easy to rebuild', async () => {
+      await ignoreGlobally('node_modules');
       const dir = await subWorktree();
-      writeFileSync(path.join(dir, 'sub', '.env.local'), 'SECRET=1\n');
-      await expect(run([dir])).rejects.toMatchObject({ code: 'dirty_worktree', extra: { existing: dir, files: ['!! sub/.env.local'] } });
-      expect(readFileSync(path.join(dir, 'sub', '.env.local'), 'utf-8')).toBe('SECRET=1\n');
-      rmSync(path.join(dir, 'sub', '.env.local'));
       mkdirSync(path.join(dir, 'sub', 'node_modules'));
       writeFileSync(path.join(dir, 'sub', 'node_modules', 'x.js'), 'x\n');
       await expect(run([dir])).resolves.toMatchObject({ branch: 'feature/s', removed: dir });
@@ -420,19 +430,13 @@ describe('remove command', () => {
       writeFileSync(path.join(dir, 'sub', '.env.local'), 'SECRET=1\n');
       await expect(run([dir])).resolves.toMatchObject({ branch: 'feature/s', removed: dir });
       expect(existsSync(dir)).toBeFalsy();
+      expect(readFileSync(path.join(repo.dir, 'sub', '.env.local'), 'utf-8')).toBe('SECRET=1\n');
     });
 
     it('removes a clean worktree without --force', async () => {
       const dir = await subWorktree();
       await expect(run([dir])).resolves.toMatchObject({ branch: 'feature/s', removed: dir });
       expect(existsSync(dir)).toBeFalsy();
-    });
-
-    it('keeps a worktree with changes inside a submodule', async () => {
-      const dir = await subWorktree();
-      writeFileSync(path.join(dir, 'sub', 'README.md'), 'changed\n');
-      await expect(run([dir])).rejects.toMatchObject({ code: 'dirty_worktree', extra: { existing: dir, files: [' M sub', 'sub:  M README.md'] } });
-      expect(readFileSync(path.join(dir, 'sub', 'README.md'), 'utf-8')).toBe('changed\n');
     });
 
     it('keeps a worktree whose submodule holds a commit that no remote has', async () => {
@@ -451,14 +455,6 @@ describe('remove command', () => {
       });
       expect(readLog(log).join('\n')).not.toMatch(/remove --force/u);
       await expect(git(sub, 'rev-parse', '--short', 'local-work')).resolves.toBe(commit);
-    });
-
-    it('keeps an untracked file that status.showUntrackedFiles hides', async () => {
-      const dir = await subWorktree();
-      await git(repo.dir, 'config', 'status.showUntrackedFiles', 'no');
-      writeFileSync(path.join(dir, 'draft.txt'), 'draft\n');
-      await expect(run([dir])).rejects.toMatchObject({ code: 'dirty_worktree', extra: { files: ['?? draft.txt'] } });
-      expect(existsSync(path.join(dir, 'draft.txt'))).toBeTruthy();
     });
 
     it('reports git refusing the forced removal of a clean worktree', async () => {

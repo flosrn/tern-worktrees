@@ -2,8 +2,7 @@ import { mkdirSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vite-plus/test';
 import { CliError } from '../src/proc.ts';
-import { findWorkToLose, stopOnWorkToLose } from '../src/work-to-lose.ts';
-import type { WorkToLose } from '../src/work-to-lose.ts';
+import { guardWorkToLose } from '../src/work-to-lose.ts';
 import { git, ignoreGlobally, logGitCalls, readLog, tempDir, tmpRepo, useSandbox } from './helpers.ts';
 
 const nestedSubmodules = async (): Promise<string> => {
@@ -28,7 +27,8 @@ const writeFiles = (dir: string, files: Record<string, Buffer | string>): void =
 
 /**
  * A worktree and a main checkout with ignored files: a copy with the same bytes (`key.pem`, and `full.bin` of two full chunks), a changed `.env`,
- * a file that only the worktree holds, a symbolic link, a file that is a directory in the main checkout, and a file with a different last chunk.
+ * a file that only the worktree holds, a symbolic link to the file at the same path in the main checkout, a file that is a directory in the main
+ * checkout, and a file with a different last chunk.
  */
 const copiesOfMain = async (): Promise<{ dir: string; main: string }> => {
   await ignoreGlobally('.env', '*.pem', '*.bin', 'secrets');
@@ -39,22 +39,22 @@ const copiesOfMain = async (): Promise<{ dir: string; main: string }> => {
   changed[changed.length - 1] = 0;
   const { dir } = await tmpRepo();
   const main = tempDir('main');
-  writeFiles(main, { '.env': 'SECRET=1\n', 'full.bin': full, 'key.pem': 'KEY-A\n', 'ragged.bin': ragged, 'secrets/a': 'x\n' });
+  writeFiles(main, { '.env': 'SECRET=1\n', 'full.bin': full, 'key.pem': 'KEY-A\n', 'link.pem': 'KEY-A\n', 'ragged.bin': ragged, 'secrets/a': 'x\n' });
   writeFiles(dir, { '.env': 'SECRET=2\n', 'full.bin': full, 'key.pem': 'KEY-A\n', 'only.pem': 'KEY-B\n', 'ragged.bin': changed, 'secrets': '' });
-  symlinkSync(path.join(main, 'key.pem'), path.join(dir, 'link.pem'));
+  symlinkSync(path.join(main, 'link.pem'), path.join(dir, 'link.pem'));
   return { dir, main };
 };
 
-const thrown = (action: () => void): CliError | undefined => {
+const rejection = async (promise: Promise<unknown>): Promise<CliError> => {
   try {
-    action();
+    await promise;
   } catch (error) {
     if (error instanceof CliError) {
       return error;
     }
     throw error;
   }
-  return undefined;
+  throw new Error('the promise resolved');
 };
 
 describe('work to lose', () => {
@@ -62,13 +62,14 @@ describe('work to lose', () => {
     useSandbox();
   });
 
-  describe(findWorkToLose, () => {
-    it('finds nothing in a clean worktree with pushed submodules', async () => {
+  describe(guardWorkToLose, () => {
+    it('resolves no files for either operation in a clean worktree with pushed submodules', async () => {
       const dir = await nestedSubmodules();
-      await expect(findWorkToLose(dir, null)).resolves.toStrictEqual({ changes: [], hardToRebuild: [] });
+      await expect(guardWorkToLose(dir, 'recreating')).resolves.toStrictEqual([]);
+      await expect(guardWorkToLose(dir, { removing: tempDir('main') })).resolves.toStrictEqual([]);
     });
 
-    it('lists unpushed commits and changes at each submodule depth, and an ignored file as hard to rebuild', async () => {
+    it('stops both operations on unpushed commits and changes at each submodule depth, and stops teardown also on an ignored file', async () => {
       const dir = await nestedSubmodules();
       const outer = path.join(dir, 'outer');
       const nested = path.join(outer, 'inner');
@@ -79,31 +80,40 @@ describe('work to lose', () => {
       writeFileSync(path.join(outer, 'new.txt'), 'x\n');
       await ignoreGlobally('secret.env');
       writeFileSync(path.join(outer, 'secret.env'), 'x\n');
-      await expect(findWorkToLose(dir, null)).resolves.toStrictEqual({
-        changes: [' M outer', 'outer: ?? new.txt', `outer/inner: unpushed ${local.trim()}`],
-        hardToRebuild: ['outer/secret.env'],
-      });
+      const changes = [' M outer', 'outer: ?? new.txt', `outer/inner: unpushed ${local.trim()}`];
+      const recreating = await rejection(guardWorkToLose(dir, 'recreating'));
+      expect([recreating.code, recreating.message]).toStrictEqual(['dirty_worktree', `${dir} has work that recreating it would lose`]);
+      expect(recreating.extra).toStrictEqual({ changes, existing: dir, files: changes, hardToRebuild: [] });
+      const removing = await rejection(guardWorkToLose(dir, { removing: tempDir('main') }));
+      expect([removing.code, removing.message]).toStrictEqual(['dirty_worktree', `${dir} has work that removing it would lose`]);
+      expect(removing.extra).toStrictEqual({ changes, existing: dir, files: [...changes, '!! outer/secret.env'], hardToRebuild: ['outer/secret.env'] });
     });
 
-    it('lists the commit of a detached submodule HEAD that no remote holds', async () => {
+    it('stops on the commit of a detached submodule HEAD that no remote holds', async () => {
       const dir = await nestedSubmodules();
       const outer = path.join(dir, 'outer');
       await git(outer, 'commit', '--quiet', '--allow-empty', '-m', 'detached work');
       const head = await git(outer, 'rev-parse', '--short', 'HEAD');
-      await expect(findWorkToLose(dir, null)).resolves.toStrictEqual({ changes: [' M outer', `outer: unpushed ${head.trim()}`], hardToRebuild: [] });
+      const error = await rejection(guardWorkToLose(dir, 'recreating'));
+      expect(error.extra).toStrictEqual({
+        changes: [' M outer', `outer: unpushed ${head.trim()}`],
+        existing: dir,
+        files: [' M outer', `outer: unpushed ${head.trim()}`],
+        hardToRebuild: [],
+      });
     });
 
     it('lists the submodules once', async () => {
       const dir = await nestedSubmodules();
       const log = await logGitCalls();
-      await findWorkToLose(dir, dir);
+      await guardWorkToLose(dir, { removing: dir });
       expect(readLog(log).filter(call => call.includes(' submodule foreach '))).toHaveLength(1);
     });
 
     it('raises git_failed when it cannot list the submodules', async () => {
       const dir = await nestedSubmodules();
       writeFileSync(path.join(dir, '.gitmodules'), '[submodule "outer"\n');
-      const failure = findWorkToLose(dir, null);
+      const failure = guardWorkToLose(dir, 'recreating');
       await expect(failure).rejects.toMatchObject({ code: 'git_failed' });
       await expect(failure).rejects.toThrow(/bad config line/u);
     });
@@ -111,17 +121,17 @@ describe('work to lose', () => {
     it('raises git_failed when it cannot read the commits of a submodule', async () => {
       const dir = await nestedSubmodules();
       await git(path.join(dir, 'outer'), 'symbolic-ref', 'HEAD', 'refs/heads/unborn');
-      const failure = findWorkToLose(dir, null);
+      const failure = guardWorkToLose(dir, 'recreating');
       await expect(failure).rejects.toMatchObject({ code: 'git_failed' });
       await expect(failure).rejects.toThrow(/unknown revision/u);
     });
 
     it('raises git_failed outside a repo', async () => {
-      await expect(findWorkToLose(tempDir('plain'), null)).rejects.toMatchObject({ code: 'git_failed' });
-      await expect(findWorkToLose(tempDir('plain'), tempDir('main'))).rejects.toMatchObject({ code: 'git_failed' });
+      await expect(guardWorkToLose(tempDir('plain'), 'recreating')).rejects.toMatchObject({ code: 'git_failed' });
+      await expect(guardWorkToLose(tempDir('plain'), { removing: tempDir('main') })).rejects.toMatchObject({ code: 'git_failed' });
     });
 
-    it('lists each ignored file outside the rebuildable dirs as hard to rebuild, in submodules at each depth too', async () => {
+    it('gives relocate each ignored file outside the rebuildable dirs to carry, in submodules at each depth too', async () => {
       const dir = await nestedSubmodules();
       await ignoreGlobally(
         '.env*',
@@ -156,22 +166,45 @@ describe('work to lose', () => {
       const files = ['.env', 'secrets/a.pem', 'secrets/deep/b.txt', 'outer/.env.local', 'outer/inner/local.settings.json', ...rebuildable];
       writeFiles(dir, Object.fromEntries(files.map(file => [file, 'x\n'])));
       symlinkSync('missing', path.join(dir, '.env.link'));
-      const work = await findWorkToLose(dir, null);
-      expect(work.changes).toStrictEqual([]);
-      expect(work.hardToRebuild.toSorted()).toStrictEqual(['.env', '.env.link', 'outer/.env.local', 'outer/inner/local.settings.json', 'secrets/a.pem', 'secrets/deep/b.txt']);
+      const carried = await guardWorkToLose(dir, 'recreating');
+      expect(carried.toSorted()).toStrictEqual(['.env', '.env.link', 'outer/.env.local', 'outer/inner/local.settings.json', 'secrets/a.pem', 'secrets/deep/b.txt']);
     });
 
-    it('drops each copy with the bytes of the file at the same path in the main checkout', async () => {
+    it('does not stop teardown on a copy with the same bytes as the file at the same path in the main checkout', async () => {
       const { dir, main } = await copiesOfMain();
-      const work = await findWorkToLose(dir, main);
-      expect(work.changes).toStrictEqual([]);
-      expect(work.hardToRebuild.toSorted()).toStrictEqual(['.env', 'link.pem', 'only.pem', 'ragged.bin', 'secrets']);
+      const error = await rejection(guardWorkToLose(dir, { removing: main }));
+      // SAFETY: guardWorkToLose sets `hardToRebuild` to the string[] of blocking files.
+      const hardToRebuild = error.extra.hardToRebuild as string[];
+      expect(hardToRebuild.toSorted()).toStrictEqual(['.env', 'link.pem', 'only.pem', 'ragged.bin', 'secrets']);
+      expect(error.extra).toStrictEqual({ changes: [], existing: dir, files: hardToRebuild.map(file => `!! ${file}`), hardToRebuild });
     });
 
-    it('keeps each copy without a main checkout, because relocate carries them', async () => {
+    it('does not stop teardown on a copy with the same bytes as the file at the same path in the main checkout, in submodules at each depth too', async () => {
+      const dir = await nestedSubmodules();
+      await ignoreGlobally('.env.local');
+      const main = tempDir('main');
+      writeFiles(main, { 'outer/.env.local': 'SECRET=1\n', 'outer/inner/.env.local': 'SECRET=1\n' });
+      writeFiles(dir, { 'outer/.env.local': 'SECRET=1\n', 'outer/inner/.env.local': 'SECRET=2\n' });
+      const error = await rejection(guardWorkToLose(dir, { removing: main }));
+      expect(error.extra).toStrictEqual({ changes: [], existing: dir, files: ['!! outer/inner/.env.local'], hardToRebuild: ['outer/inner/.env.local'] });
+    });
+
+    it('gives relocate each copy to carry', async () => {
       const { dir } = await copiesOfMain();
-      const work = await findWorkToLose(dir, null);
-      expect(work.hardToRebuild.toSorted()).toStrictEqual(['.env', 'full.bin', 'key.pem', 'link.pem', 'only.pem', 'ragged.bin', 'secrets']);
+      const carried = await guardWorkToLose(dir, 'recreating');
+      expect(carried.toSorted()).toStrictEqual(['.env', 'full.bin', 'key.pem', 'link.pem', 'only.pem', 'ragged.bin', 'secrets']);
+    });
+
+    it('stops relocate on changes alone, and teardown on a hard-to-rebuild file alone', async () => {
+      const repo = await tmpRepo();
+      writeFileSync(path.join(repo.dir, 'a'), 'x\n');
+      const changesOnly = await rejection(guardWorkToLose(repo.dir, 'recreating'));
+      expect(changesOnly.extra).toStrictEqual({ changes: ['?? a'], existing: repo.dir, files: ['?? a'], hardToRebuild: [] });
+      const other = await tmpRepo('other');
+      await ignoreGlobally('.env');
+      writeFileSync(path.join(other.dir, '.env'), 'SECRET=1\n');
+      const hardToRebuildOnly = await rejection(guardWorkToLose(other.dir, { removing: tempDir('main') }));
+      expect(hardToRebuildOnly.extra).toStrictEqual({ changes: [], existing: other.dir, files: ['!! .env'], hardToRebuild: ['.env'] });
     });
 
     it('closes each file it compares', async () => {
@@ -184,47 +217,8 @@ describe('work to lose', () => {
         writeFileSync(path.join(mainCheckout, name), `${name}\n`);
       }
       const openBefore = readdirSync('/dev/fd').length;
-      await expect(findWorkToLose(repo.dir, mainCheckout)).resolves.toStrictEqual({ changes: [], hardToRebuild: [] });
+      await expect(guardWorkToLose(repo.dir, { removing: mainCheckout })).resolves.toStrictEqual([]);
       expect(readdirSync('/dev/fd').length - openBefore).toBeLessThan(names.length / 2);
-    });
-  });
-
-  describe(stopOnWorkToLose, () => {
-    const mixed: WorkToLose = { changes: [' M sub', 'sub: unpushed abc1234'], hardToRebuild: ['.env', 'sub/key.pem'] };
-
-    it('does not throw when there is no work to lose', () => {
-      expect(
-        thrown(() => {
-          stopOnWorkToLose('/wt/app/x', 'removing', { changes: [], hardToRebuild: [] });
-        }),
-      ).toBeUndefined();
-    });
-
-    it.each([
-      ['removing', '/wt/app/x has work that removing it would lose'],
-      ['recreating', '/wt/app/x has work that recreating it would lose'],
-    ] as const)('throws dirty_worktree while %s, with the changes first and then the hard-to-rebuild files', (doing, message) => {
-      const error = thrown(() => {
-        stopOnWorkToLose('/wt/app/x', doing, mixed);
-      });
-      expect([error?.code, error?.message]).toStrictEqual(['dirty_worktree', message]);
-      expect(error?.extra).toStrictEqual({
-        changes: [' M sub', 'sub: unpushed abc1234'],
-        existing: '/wt/app/x',
-        files: [' M sub', 'sub: unpushed abc1234', '!! .env', '!! sub/key.pem'],
-        hardToRebuild: ['.env', 'sub/key.pem'],
-      });
-    });
-
-    it('throws on changes alone, and on hard-to-rebuild files alone', () => {
-      const changesOnly = thrown(() => {
-        stopOnWorkToLose('/wt/app/x', 'recreating', { changes: ['?? a'], hardToRebuild: [] });
-      });
-      const hardToRebuildOnly = thrown(() => {
-        stopOnWorkToLose('/wt/app/x', 'removing', { changes: [], hardToRebuild: ['.env'] });
-      });
-      expect(changesOnly?.extra).toStrictEqual({ changes: ['?? a'], existing: '/wt/app/x', files: ['?? a'], hardToRebuild: [] });
-      expect(hardToRebuildOnly?.extra).toStrictEqual({ changes: [], existing: '/wt/app/x', files: ['!! .env'], hardToRebuild: ['.env'] });
     });
   });
 });

@@ -3,12 +3,13 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { loadConfig } from '../config.ts';
 import type { Teardown } from '../config.ts';
-import { currentBranch, fetchOrigin, gitMust, gitRun, isAncestor, linkedWorktreeRoot, requireRepoRoot } from '../git.ts';
-import { defaultBranch, listPullRequests, originRepo } from '../github.ts';
+import { currentBranch, fetchOrigin, gitMust, gitRun, isAncestor, requireCheckoutAt } from '../git.ts';
+import { defaultBranch, listPullRequests, readOrigin } from '../github.ts';
 import { isUnder, worktreeOwner, worktreeRoot } from '../paths.ts';
 import { CliError } from '../proc.ts';
-import { blocksUnder, close } from '../tern.ts';
-import { findWorkToLose, stopOnWorkToLose } from '../work-to-lose.ts';
+import type { GithubRepoRef } from '../repo-ref.ts';
+import { blocksUnder, close, ls } from '../tern.ts';
+import { guardWorkToLose } from '../work-to-lose.ts';
 
 /** Why `remove` kept the branch: the teardown policy `worktree`, a branch that is not merged (also when the merge check failed), or a failed `git branch -D`. */
 export type BranchKept = 'not_deleted' | 'not_merged' | 'policy';
@@ -71,7 +72,7 @@ const removeWorktree = async (ctx: Context, force: boolean): Promise<void> => {
     }
     return;
   }
-  stopOnWorkToLose(ctx.target, 'removing', await findWorkToLose(ctx.target, ctx.root));
+  await guardWorkToLose(ctx.target, { removing: ctx.root });
   const removal = await gitRun(ctx.root, '-c', 'status.showUntrackedFiles=all', 'worktree', 'remove', ctx.target);
   if (removal.status === 0) {
     return;
@@ -95,8 +96,7 @@ const closeBlocks = async (ctx: Context, blocks: number[]): Promise<number[]> =>
   return closed.filter(block => block !== null);
 };
 
-const hasMergedPullRequest = async (ctx: Context, branch: string): Promise<boolean> => {
-  const repoRef = await originRepo(ctx.root);
+const hasMergedPullRequest = async (ctx: Context, repoRef: GithubRepoRef | null, branch: string): Promise<boolean> => {
   if (repoRef === null) {
     return false;
   }
@@ -114,8 +114,9 @@ const isMerged = async (ctx: Context, branch: string): Promise<boolean> => {
   if (fetchWarning !== null) {
     ctx.warnings.push(fetchWarning);
   }
-  const base = await defaultBranch(ctx.root);
-  return (await isAncestor(ctx.root, `refs/heads/${branch}`, `origin/${base}`)) || (await hasMergedPullRequest(ctx, branch));
+  const origin = await readOrigin(ctx.root);
+  const base = await defaultBranch(ctx.root, origin.github);
+  return (await isAncestor(ctx.root, `refs/heads/${branch}`, `origin/${base}`)) || (await hasMergedPullRequest(ctx, origin.github, branch));
 };
 
 const applyPolicy = async (ctx: Context, teardown: Teardown, branch: string): Promise<BranchKept | null> => {
@@ -147,26 +148,21 @@ export const run = async (args: string[]): Promise<RemoveResult> => {
   if (!isUnder(target, wtRoot.dir)) {
     throw new CliError('not_managed', `${target} is not under ${wtRoot.dir}`);
   }
-  const root = await linkedWorktreeRoot(target);
-  if (root === null) {
-    const mainCheckout = await requireRepoRoot(target);
-    throw new CliError('not_managed', `${target} is not the top directory of a linked worktree of ${mainCheckout}`);
+  const checkout = await requireCheckoutAt(target);
+  if (checkout.role !== 'linked') {
+    throw new CliError('not_managed', `${target} is not the top directory of a linked worktree of ${checkout.main}`);
   }
-  const owner = worktreeOwner(wtRoot, root, target);
+  const { main } = checkout;
+  const owner = worktreeOwner(wtRoot, main, target);
   if (owner !== 'tern') {
-    const layout = path.join(wtRoot.dir, path.basename(root), '<slug>');
+    const layout = path.join(wtRoot.dir, path.basename(main), '<slug>');
     throw new CliError('not_managed', owner === 'omp' ? `${target} is an omp-owned worktree, not ${layout}` : `${target} is not ${layout}`);
   }
   const branch = await currentBranch(target);
-  const ctx: Context = { root, target, warnings: [] };
-  const blocks = options['keep-tab']
-    ? []
-    : await warnOnCliError(ctx, 'tabs not closed', [], async () => {
-        const placed = await blocksUnder(target);
-        return placed.map(entry => entry.block.id);
-      });
+  const ctx: Context = { root: main, target, warnings: [] };
+  const blocks = options['keep-tab'] ? [] : await warnOnCliError(ctx, 'tabs not closed', [], async () => blocksUnder(await ls(), target).map(entry => entry.block.id));
   await removeWorktree(ctx, options.force);
   const closedBlocks = await closeBlocks(ctx, blocks);
   const branchKept = branch === null ? null : await applyPolicy(ctx, teardown, branch);
-  return { branch, branchDeleted: branch !== null && branchKept === null, branchKept, closedBlocks, removed: target, repo: root, warnings: ctx.warnings };
+  return { branch, branchDeleted: branch !== null && branchKept === null, branchKept, closedBlocks, removed: target, repo: main, warnings: ctx.warnings };
 };

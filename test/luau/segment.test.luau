@@ -4,23 +4,24 @@ local Stub = require("./stub")
 local runner = require("./runner")
 local test, eq = runner.test, runner.eq
 
-local ENV = { HOME = "/home/u" }
 local NEW = "plugin.tern-worktrees.new"
 local FEAT = "/wt/worktrees/app/feat"
 local OMP = "/wt/7-abc1234"
 
 -- A `list --all` answer with the given rows, each `{path, branch, changed, owner}`. A nil branch means a detached
--- `HEAD`.
+-- `HEAD`. Each row is a copy of the first worktree of the `list-all` fixture, with these values set.
 local function listed(rows: { { any } }): string
-	local items: { string } = {}
-	for _, row in rows do
-		local branch = if row[2] == nil then "null" else `"{row[2]}"`
-		table.insert(
-			items,
-			`\{"path":"{row[1]}","repo":"/r/app","branch":{branch},"dirty":{row[3] > 0},"changed":{row[3]},"owner":"{row[4]}"}`
-		)
-	end
-	return `\{"root":"/wt/worktrees","worktrees":[{table.concat(items, ",")}]}`
+	local vars = { root = "/wt/worktrees", repo = "/r/app", feat = FEAT, omp = OMP }
+	return Stub.answer("list-all", vars, function(answer: any)
+		local entry = answer.worktrees[1]
+		local items: { any } = {}
+		for _, row in rows do
+			local item = table.clone(entry)
+			item.path, item.branch, item.changed, item.dirty, item.owner = row[1], row[2], row[3], row[3] > 0, row[4]
+			table.insert(items, item)
+		end
+		answer.worktrees = items
+	end)
 end
 
 local LISTED = listed({
@@ -33,7 +34,7 @@ local LISTED = listed({
 -- Starts a window with one pane in `cwd` (default FEAT/src), and answers its `list --all` with `answer`.
 local function started(answer: string, cwd: string?): (Stub.Harness, any)
 	local cx = Stub.cx({ { pane = 1, tab = 1, cwd = cwd or FEAT .. "/src" } }, 1, { fail = { new_tab = true } })
-	local plugin = Stub.load({ env = ENV })
+	local plugin = Stub.load({ env = Stub.ENV })
 	plugin.handlers.window_start(cx)
 	plugin:answer("list", answer, 0, cx)
 	return plugin, cx
@@ -115,29 +116,9 @@ end
 
 test("refresh runs once after a create adds an entry", function()
 	local plugin, cx = started(LISTED, "/r/app")
-	plugin.commands.new.run(cx)
-	plugin:answer("resolve", '{"repos":[{"dir":"/r/app","root":"/r/app","name":"app"}]}', 0, cx)
-	plugin:answer(
-		"branches",
-		'{"name":"app","default":"main","branches":["main","x"],"prs":[],"prsFailed":false,"worktrees":[],"warnings":[]}',
-		0,
-		cx
-	)
-	local picker = cx.asked[#cx.asked]
-	for _, it in picker.opts.items do
-		if it.id == "b:x" then
-			picker.next(it, nil, cx)
-		end
-	end
-	eq(#plugin.runs > 0 and plugin.runs[#plugin.runs].argv[2], "create", "pending CLI call")
+	plugin:pick_branch(cx, "b:x", Stub.fixture("branches-offline", { repo = "/r/app" }))
 	local before = plugin.refreshes
-	plugin:answer(
-		"create",
-		'{"branch":"x","carried":[],"owner":"tern","path":"/wt/worktrees/app/x","repo":"/r/app","status":"created",'
-			.. '"warnings":[]}',
-		0,
-		cx
-	)
+	plugin:answer("create", Stub.fixture("create-created", Stub.worktree_vars("x")), 0, cx)
 	eq(plugin.refreshes - before, 1, "refreshes")
 	eq(segment_of(plugin, "/wt/worktrees/app/x").text, "x", "text in the new worktree")
 end)
@@ -150,18 +131,15 @@ for _, case in
 do
 	test(`refresh runs {case.refresh.word} after a remove of {case.what}`, function()
 		local plugin, cx = started(LISTED)
-		local call = { reply = function(_self: any, _res: any) end, fail = function(_self: any, _err: string) end }
-		function call.wait(_self: any, _ms: number): any
-			return nil
-		end
+		local call = Stub.call()
 		local before = plugin.refreshes
 		plugin.exports.remove(case.path, nil, cx, call)
-		plugin:answer(
-			"remove",
-			`\{"removed":"{case.path}","repo":"/r/app","branch":"feat","branchDeleted":false,"branchKept":"policy","warnings":[]}`,
-			0,
-			cx
+		local removed = Stub.answer(
+			"remove-kept-policy",
+			{ repo = "/r/app", worktree = case.path },
+			{ branch = "feat" }
 		)
+		plugin:answer("remove", removed, 0, cx)
 		eq(plugin.refreshes - before, case.refresh.count, "refreshes")
 	end)
 end

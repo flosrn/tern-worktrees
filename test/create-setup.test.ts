@@ -2,7 +2,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { run } from '../src/commands/create.ts';
-import { cliJson, contract, git, tempDir, ternLog, tmpRepo, useGithubOrigin, useOmp, useSandbox, writeTernLs } from './helpers.ts';
+import { cliJson, contract, git, logGitCalls, managedPath, readLog, tempDir, ternLog, tmpRepo, useGithubOrigin, useOmp, useSandbox, writeTernLs } from './helpers.ts';
 import type { RepoFixture, Sandbox } from './helpers.ts';
 
 const LINE = 'npm ci && npm test';
@@ -12,8 +12,6 @@ const WAIT = 'wait 42 --until prompt --timeout 30';
 let sandbox: Sandbox;
 let repo: RepoFixture;
 let originShimDir: string;
-
-const managedPath = (dirName: string): string => path.join(sandbox.wtHome, 'worktrees', 'aoyama', dirName);
 
 const writeSetup = (setup: Record<string, string[]>): void => {
   writeFileSync(path.join(sandbox.pluginData, 'config.json'), JSON.stringify({ setup }));
@@ -36,16 +34,13 @@ describe('create command', () => {
       const result = await run(['--repo', repo.dir, '--branch', 'feature/x']);
       expect(result).toMatchObject({ setup: { line: LINE, typed: true }, status: 'created', tab: { block: 42, opened: true, session: 'work' }, warnings: [] });
       expect(Object.keys(result)).toStrictEqual(['branch', 'carried', 'owner', 'path', 'repo', 'setup', 'status', 'tab', 'warnings']);
-      expect(ternLog()).toStrictEqual(['ls --json', 'ls --json', `new tab work --cwd ${managedPath('feature-x')} --json`, 'rename 42 feature/x --json', WAIT, `run 42 ${LINE}`]);
+      expect(ternLog()).toStrictEqual(['ls --json', `new tab work --cwd ${managedPath('feature-x')} --json`, 'rename 42 feature/x --json', WAIT, `run 42 ${LINE}`]);
     });
 
     it('leaves the setup commands to the caller with --no-tab', async () => {
-      await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab'])).resolves.toMatchObject({
-        setup: { line: LINE, typed: false },
-        status: 'created',
-        tab: null,
-        warnings: [],
-      });
+      await expect(cliJson(['create', '--repo', repo.dir, '--branch', 'feature/x', '--no-tab'])).resolves.toStrictEqual(
+        contract('create-setup-no-tab', { branch: 'feature/x', repo: repo.dir, worktree: managedPath('feature-x') }),
+      );
       expect(ternLog()).toStrictEqual([]);
     });
 
@@ -133,6 +128,14 @@ describe('create command', () => {
         warnings: ['tab not opened: fake tern: new failed'],
       });
       expect(setupCalls()).toStrictEqual([]);
+    });
+  });
+
+  describe('origin', () => {
+    it('reads the origin once for a created worktree', async () => {
+      const log = await logGitCalls();
+      await expect(run(['--repo', repo.dir, '--branch', 'feature/x'])).resolves.toMatchObject({ setup: { line: LINE }, status: 'created' });
+      expect(readLog(log).filter(line => line.includes('remote get-url origin'))).toHaveLength(1);
     });
   });
 });

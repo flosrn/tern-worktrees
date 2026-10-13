@@ -1,8 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vite-plus/test';
-import { cloneDestination, defaultBranch, ghMust, ghRun, ghTry, listPullRequests, originRepo } from '../src/github.ts';
-import { nameWithOwner } from '../src/repo-ref.ts';
+import { cloneDestination, defaultBranch, ghMust, ghRun, ghTry, listPullRequests, readOrigin } from '../src/github.ts';
 import type { Sandbox } from './helpers.ts';
 import { ghDefaultBranchFixture, ghFixture, ghLog, git, tempDir, tmpRepo, useSandbox } from './helpers.ts';
 
@@ -13,37 +12,23 @@ describe('github helpers', () => {
     sandbox = useSandbox();
   });
 
-  describe(nameWithOwner, () => {
-    it('joins the owner and the name', () => {
-      expect(nameWithOwner({ name: 'name', owner: 'owner' })).toBe('owner/name');
-    });
-  });
-
-  describe(originRepo, () => {
-    it.each([
-      ['git@github.com:riicodespretty/tern-worktrees.git', 'riicodespretty', 'tern-worktrees'],
-      ['git@github.com:owner/name', 'owner', 'name'],
-      ['https://github.com/owner/name.git', 'owner', 'name'],
-      ['https://github.com/owner/some.repo', 'owner', 'some.repo'],
-    ])('parses %s', async (url, owner, name) => {
+  describe(readOrigin, () => {
+    it('gives the GitHub owner and name of a GitHub origin', async () => {
       const repo = await tmpRepo();
-      await git(repo.dir, 'remote', 'set-url', 'origin', url);
-      await expect(originRepo(repo.dir)).resolves.toStrictEqual({ name, owner });
+      await git(repo.dir, 'remote', 'set-url', 'origin', 'git@github.com:owner/name.git');
+      await expect(readOrigin(repo.dir)).resolves.toStrictEqual({ github: { name: 'name', owner: 'owner' }, present: true });
     });
 
-    it.each(['https://gitlab.com/owner/name.git', 'https://github.com/owner/name/extra', 'xgit@github.com:owner/name', 'git@github.com:owner/name.git.bak/x'])(
-      'gives null for %s',
-      async url => {
-        const repo = await tmpRepo();
-        await git(repo.dir, 'remote', 'set-url', 'origin', url);
-        await expect(originRepo(repo.dir)).resolves.toBeNull();
-      },
-    );
+    it('gives a present origin without GitHub for a non-GitHub origin', async () => {
+      const repo = await tmpRepo();
+      await git(repo.dir, 'remote', 'set-url', 'origin', 'https://gitlab.com/owner/name.git');
+      await expect(readOrigin(repo.dir)).resolves.toStrictEqual({ github: null, present: true });
+    });
 
-    it('gives null without an origin', async () => {
+    it('gives present false and a null github without an origin remote', async () => {
       const repo = await tmpRepo();
       await git(repo.dir, 'remote', 'remove', 'origin');
-      await expect(originRepo(repo.dir)).resolves.toBeNull();
+      await expect(readOrigin(repo.dir)).resolves.toStrictEqual({ github: null, present: false });
     });
   });
 
@@ -121,6 +106,13 @@ describe('github helpers', () => {
       mkdirSync(dest, { recursive: true });
       await expect(cloneDestination(repoRef)).rejects.toMatchObject({ code: 'path_conflict', extra: { path: dest } });
     });
+
+    it('raises path_conflict when the path holds a checkout without a GitHub origin', async () => {
+      mkdirSync(dest, { recursive: true });
+      await git(dest, 'init', '--quiet');
+      await git(dest, 'remote', 'add', 'origin', 'https://gitlab.com/me/x.git');
+      await expect(cloneDestination(repoRef)).rejects.toMatchObject({ code: 'path_conflict', extra: { path: dest } });
+    });
   });
 
   describe(defaultBranch, () => {
@@ -128,7 +120,8 @@ describe('github helpers', () => {
       const repo = await tmpRepo();
       await repo.pushBranch('trunk/next');
       await git(repo.dir, 'remote', 'set-head', 'origin', 'trunk/next');
-      await expect(defaultBranch(repo.dir)).resolves.toBe('trunk/next');
+      await expect(defaultBranch(repo.dir, { name: 'name', owner: 'owner' })).resolves.toBe('trunk/next');
+      expect(existsSync(sandbox.ghLog)).toBeFalsy();
     });
 
     it('asks GitHub when origin/HEAD is unset', async () => {
@@ -136,41 +129,34 @@ describe('github helpers', () => {
       await git(repo.dir, 'remote', 'set-head', 'origin', '--delete');
       await git(repo.dir, 'remote', 'set-url', 'origin', 'git@github.com:owner/name.git');
       ghDefaultBranchFixture('owner/name', 'develop');
-      await expect(defaultBranch(repo.dir)).resolves.toBe('develop');
+      await expect(defaultBranch(repo.dir, { name: 'name', owner: 'owner' })).resolves.toBe('develop');
     });
 
     it('raises gh_failed when GitHub does not answer', async () => {
       const repo = await tmpRepo();
       await git(repo.dir, 'remote', 'set-head', 'origin', '--delete');
       await git(repo.dir, 'remote', 'set-url', 'origin', 'git@github.com:owner/name.git');
-      await expect(defaultBranch(repo.dir)).rejects.toMatchObject({ code: 'gh_failed', message: 'fake gh: no fixture' });
+      await expect(defaultBranch(repo.dir, { name: 'name', owner: 'owner' })).rejects.toMatchObject({ code: 'gh_failed', message: 'fake gh: no fixture' });
     });
 
-    it('skips GitHub offline and gives the current branch when origin/HEAD is unset', async () => {
+    it('skips GitHub when github is null', async () => {
       const repo = await tmpRepo();
       await git(repo.dir, 'remote', 'set-head', 'origin', '--delete');
       await git(repo.dir, 'remote', 'set-url', 'origin', 'git@github.com:owner/name.git');
       ghDefaultBranchFixture('owner/name', 'develop');
       await git(repo.dir, 'switch', '--quiet', '-c', 'work');
-      await expect(defaultBranch(repo.dir, { offline: true })).resolves.toBe('work');
+      await expect(defaultBranch(repo.dir, null)).resolves.toBe('work');
       expect(existsSync(sandbox.ghLog)).toBeFalsy();
     });
 
     it('reads origin/HEAD offline', async () => {
       const repo = await tmpRepo();
       await git(repo.dir, 'switch', '--quiet', '-c', 'work');
-      await expect(defaultBranch(repo.dir, { offline: true })).resolves.toBe('main');
-    });
-
-    it('falls back to the current branch without a GitHub origin', async () => {
-      const repo = await tmpRepo();
-      await git(repo.dir, 'remote', 'remove', 'origin');
-      await git(repo.dir, 'switch', '--quiet', '-c', 'work');
-      await expect(defaultBranch(repo.dir)).resolves.toBe('work');
+      await expect(defaultBranch(repo.dir, null)).resolves.toBe('main');
     });
 
     it('raises git_failed outside a repo', async () => {
-      await expect(defaultBranch(tempDir('plain'))).rejects.toMatchObject({ code: 'git_failed' });
+      await expect(defaultBranch(tempDir('plain'), null)).rejects.toMatchObject({ code: 'git_failed' });
     });
   });
 });

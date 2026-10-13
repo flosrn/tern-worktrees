@@ -2,20 +2,13 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSy
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { run } from '../src/commands/create.ts';
-import { cliJson, contract, ghFixture, git, ignoreGlobally, ompLog, tempDir, tmpRepo, useGithubOrigin, useOmp, useSandbox } from './helpers.ts';
+import { cliJson, contract, headName, ghPrView, git, ignoreGlobally, managedPath, ompLog, tempDir, tmpRepo, useGithubOrigin, useOmp, useSandbox } from './helpers.ts';
 import type { RepoFixture, Sandbox } from './helpers.ts';
 
 const SUBMODULE_REFUSED = 'recreated: git worktree move refused (fatal: working trees containing submodules cannot be moved or removed)';
 
 let sandbox: Sandbox;
 let repo: RepoFixture;
-
-const managedPath = (dirName: string): string => path.join(sandbox.wtHome, 'worktrees', 'aoyama', dirName);
-
-const currentBranch = async (dir: string): Promise<string> => {
-  const out = await git(dir, 'rev-parse', '--abbrev-ref', 'HEAD');
-  return out.trim();
-};
 
 const stagingDirs = (): string[] => readdirSync(sandbox.tmp).filter(name => name.startsWith('tern-wt-carry-'));
 
@@ -53,7 +46,7 @@ const expectKept = async (old: string, changes: string[]): Promise<void> => {
     extra: { changes, existing: old, files: changes, hardToRebuild: [] },
     message: `${old} has work that recreating it would lose`,
   });
-  await expect(currentBranch(old)).resolves.toBe('feature/s');
+  await expect(headName(old)).resolves.toBe('feature/s');
   expect(existsSync(managedPath('feature-s'))).toBeFalsy();
 };
 
@@ -75,16 +68,9 @@ const failCopyOut = async (): Promise<{ failure: Promise<unknown>; old: string }
 };
 
 const expectLockedKept = async (old: string): Promise<void> => {
-  await expect(currentBranch(old)).resolves.toBe('feature/s');
+  await expect(headName(old)).resolves.toBe('feature/s');
   await expect(git(repo.dir, 'worktree', 'list', '--porcelain')).resolves.toContain('locked on usb');
   expect(existsSync(managedPath('feature-s'))).toBeFalsy();
-};
-
-const prView = (fork: boolean): void => {
-  ghFixture(
-    ['pr', 'view', '7', '--repo', 'virtusize/aoyama', '--json', 'number,headRefName,isCrossRepository'],
-    JSON.stringify({ headRefName: 'feature/x', isCrossRepository: fork, number: 7 }),
-  );
 };
 
 describe('create command', () => {
@@ -105,11 +91,9 @@ describe('create command', () => {
 
     it('rejects a worktree elsewhere without --relocate', async () => {
       const old = await outsideWorktree('origin/feature/x', '--track', '-b', 'feature/x');
-      await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab'])).rejects.toMatchObject({
-        code: 'worktree_exists_elsewhere',
-        extra: { existing: old, target: managedPath('feature-x') },
-        message: `feature/x has a worktree at ${old}; pass --relocate to move it to ${managedPath('feature-x')}`,
-      });
+      await expect(cliJson(['create', '--repo', repo.dir, '--branch', 'feature/x', '--no-tab'])).resolves.toStrictEqual(
+        contract('create-elsewhere', { branch: 'feature/x', existing: old, target: managedPath('feature-x') }),
+      );
     });
 
     it('moves a worktree into the root', async () => {
@@ -121,7 +105,7 @@ describe('create command', () => {
         warnings: [],
       });
       expect(existsSync(old)).toBeFalsy();
-      await expect(currentBranch(managedPath('feature-x'))).resolves.toBe('feature/x');
+      await expect(headName(managedPath('feature-x'))).resolves.toBe('feature/x');
     });
 
     it('moves a worktree elsewhere into the omp root', async () => {
@@ -132,7 +116,7 @@ describe('create command', () => {
       await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab'])).rejects.toMatchObject({ code: 'worktree_exists_elsewhere', extra: { existing: old, target } });
       await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--relocate', '--no-tab'])).resolves.toMatchObject({ path: target, status: 'relocated', warnings: [] });
       expect(existsSync(old)).toBeFalsy();
-      await expect(currentBranch(target)).resolves.toBe('feature/x');
+      await expect(headName(target)).resolves.toBe('feature/x');
     });
 
     it('unlocks a locked worktree before the move', async () => {
@@ -146,7 +130,7 @@ describe('create command', () => {
       const old = await outsideWorktree('origin/feature/x', '--track', '-b', 'feature/x');
       mkdirSync(managedPath('feature-x'), { recursive: true });
       await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--relocate', '--no-tab'])).rejects.toMatchObject({ code: 'path_conflict' });
-      await expect(currentBranch(old)).resolves.toBe('feature/x');
+      await expect(headName(old)).resolves.toBe('feature/x');
     });
 
     it('rejects a dangling symbolic link at the target path', async () => {
@@ -159,7 +143,7 @@ describe('create command', () => {
       await run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab']);
       rmSync(managedPath('feature-x'), { force: true, recursive: true });
       await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab'])).resolves.toMatchObject({ status: 'created' });
-      await expect(currentBranch(managedPath('feature-x'))).resolves.toBe('feature/x');
+      await expect(headName(managedPath('feature-x'))).resolves.toBe('feature/x');
     });
 
     it('leaves the stale record of another branch alone', async () => {
@@ -175,7 +159,7 @@ describe('create command', () => {
       const old = await outsideWorktree('origin/feature/x', '--track', '-b', 'feature/x');
       rmSync(old, { force: true, recursive: true });
       await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab'])).resolves.toMatchObject({ status: 'created' });
-      await expect(currentBranch(managedPath('feature-x'))).resolves.toBe('feature/x');
+      await expect(headName(managedPath('feature-x'))).resolves.toBe('feature/x');
       await expect(git(repo.dir, 'worktree', 'list', '--porcelain')).resolves.not.toContain(old);
     });
 
@@ -282,17 +266,15 @@ describe('create command', () => {
 
       it('keeps the staging dir and the error code when recreating the worktree fails', async () => {
         await useGithubOrigin();
-        prView(true);
+        ghPrView('feature/x', { fork: true });
         await ignoreGlobally('.env');
         const old = path.join(tempDir('orca'), 'wt');
         await git(repo.dir, 'worktree', 'add', '--quiet', '-b', 'pr-7', old, 'origin/feature/s');
         await git(old, '-c', 'protocol.file.allow=always', 'submodule', '--quiet', 'update', '--init');
         writeFileSync(path.join(old, '.env'), 'SECRET=1\n');
-        const failure = run(['--repo', repo.dir, '--pr', '7', '--relocate', '--no-tab']);
-        await expect(failure).rejects.toMatchObject({ code: 'gh_failed' });
+        const answer = await cliJson(['create', '--repo', repo.dir, '--pr', '7', '--relocate', '--no-tab']);
         const stagingDir = path.join(sandbox.tmp, stagingDirs()[0]);
-        await expect(failure).rejects.toMatchObject({ extra: { staging: stagingDir } });
-        await expect(failure).rejects.toThrow(`fake gh: no fixture; the carried files stay in ${stagingDir}`);
+        expect(answer).toStrictEqual(contract('relocate-staging', { staging: stagingDir }));
         expect(readFileSync(path.join(stagingDir, '.env'), 'utf-8')).toBe('SECRET=1\n');
       });
 
@@ -323,7 +305,7 @@ describe('create command', () => {
           warnings: [SUBMODULE_REFUSED],
         });
         expect(existsSync(old)).toBeFalsy();
-        await expect(currentBranch(managedPath('feature-s'))).resolves.toBe('feature/s');
+        await expect(headName(managedPath('feature-s'))).resolves.toBe('feature/s');
         expect(existsSync(path.join(managedPath('feature-s'), 'sub', 'README.md'))).toBeTruthy();
       });
 
@@ -371,7 +353,7 @@ describe('create command', () => {
         expect(result.status).toBe('created');
         expect(result.warnings).toHaveLength(1);
         expect(result.warnings[0]).toMatch(/^submodule update failed: .*transport 'file' not allowed.*\S$/su);
-        await expect(currentBranch(managedPath('feature-s'))).resolves.toBe('feature/s');
+        await expect(headName(managedPath('feature-s'))).resolves.toBe('feature/s');
         await expect(run(['--repo', repo.dir, '--branch', 'feature/s', '--no-tab'])).resolves.toMatchObject({ status: 'reused', warnings: [] });
       });
     });

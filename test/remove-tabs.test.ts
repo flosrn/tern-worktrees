@@ -2,14 +2,13 @@ import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { run } from '../src/commands/remove.ts';
-import { git, ternLog, tmpRepo, useSandbox, writeTernLs, writeTernLsRaw } from './helpers.ts';
-import type { RepoFixture, Sandbox } from './helpers.ts';
+import { git, managedPath, ternLog, tmpRepo, useSandbox, writeTernLs, writeTernLsRaw } from './helpers.ts';
+import type { RepoFixture } from './helpers.ts';
 
-let sandbox: Sandbox;
 let repo: RepoFixture;
 
 const addFeature = async (): Promise<string> => {
-  const dir = path.join(sandbox.wtHome, 'worktrees', 'aoyama', 'feature-x');
+  const dir = managedPath('feature-x');
   mkdirSync(path.dirname(dir), { recursive: true });
   await git(repo.dir, 'worktree', 'add', '--quiet', '--track', '-b', 'feature/x', dir, 'origin/feature/x');
   return dir;
@@ -17,7 +16,7 @@ const addFeature = async (): Promise<string> => {
 
 describe('remove command', () => {
   beforeEach(async () => {
-    sandbox = useSandbox();
+    useSandbox();
     repo = await tmpRepo('aoyama');
     await repo.pushBranch('feature/x');
     writeTernLs({ work: [] });
@@ -50,6 +49,13 @@ describe('remove command', () => {
       writeTernLsRaw('{');
       await expect(run([dir])).rejects.toBeInstanceOf(SyntaxError);
       expect(existsSync(dir)).toBeTruthy();
+    });
+
+    it.each<{ flags: string[] }>([{ flags: [] }, { flags: ['--force'] }])('closes each tab after the worktree is gone, with $flags', async ({ flags }) => {
+      const dir = await addFeature();
+      writeTernLs({ work: [dir] });
+      vi.stubEnv('FAKE_TERN_GONE_BEFORE_CLOSE', dir);
+      await expect(run([dir, ...flags])).resolves.toMatchObject({ closedBlocks: [1], warnings: [] });
     });
   });
 });

@@ -3,9 +3,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, vi } from 'vite-plus/test';
-import { buildRepo, gitWith } from '../scripts/repo-fixture.ts';
+import { buildRepo } from '../scripts/repo-fixture.ts';
 import type { RepoFixture } from '../scripts/repo-fixture.ts';
 import { main } from '../src/cli.ts';
+import { gitMust } from '../src/git.ts';
 import { must } from '../src/proc.ts';
 import type { TernListing } from '../src/tern.ts';
 
@@ -35,7 +36,7 @@ export const tempDir = (label: string): string => {
 };
 
 /** Runs git in `cwd` and returns its `stdout`. */
-export const git = gitWith();
+export const git = gitMust;
 
 /** The temporary directories and files of a test. */
 export interface Sandbox {
@@ -86,6 +87,7 @@ export const useSandbox = (): Sandbox => {
   vi.stubEnv('FAKE_TERN_LOG', sandbox.ternLog);
   vi.stubEnv('FAKE_TERN_FAIL', '');
   vi.stubEnv('FAKE_TERN_WAIT_STATUS', '');
+  vi.stubEnv('FAKE_TERN_GONE_BEFORE_CLOSE', '');
   vi.stubEnv('FAKE_GH_DIR', sandbox.ghDir);
   vi.stubEnv('FAKE_GH_LOG', sandbox.ghLog);
   vi.stubEnv('TERN_WT_OMP', path.join(root, 'no-omp'));
@@ -95,6 +97,25 @@ export const useSandbox = (): Sandbox => {
   vi.stubEnv('FAKE_OMP_WARN', '');
   for (const name of ['OMP_WORKTREE_DIR', 'OMP_PROFILE', 'PI_PROFILE', 'PI_CONFIG_DIR', 'PI_CODING_AGENT_DIR', 'XDG_DATA_HOME']) {
     vi.stubEnv(name, '');
+  }
+  for (const name of [
+    'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+    'GIT_COMMON_DIR',
+    'GIT_CONFIG',
+    'GIT_CONFIG_COUNT',
+    'GIT_CONFIG_PARAMETERS',
+    'GIT_DIR',
+    'GIT_GRAFT_FILE',
+    'GIT_IMPLICIT_WORK_TREE',
+    'GIT_INDEX_FILE',
+    'GIT_NO_REPLACE_OBJECTS',
+    'GIT_OBJECT_DIRECTORY',
+    'GIT_PREFIX',
+    'GIT_REPLACE_REF_BASE',
+    'GIT_SHALLOW_FILE',
+    'GIT_WORK_TREE',
+  ]) {
+    vi.stubEnv(name, undefined);
   }
   vi.stubEnv('GIT_AUTHOR_NAME', 'Test');
   vi.stubEnv('GIT_AUTHOR_EMAIL', 'test@example.com');
@@ -180,6 +201,23 @@ export const ghFixture = (args: string[], body: string): void => {
   writeFileSync(path.join(activeSandbox().ghDir, `${key}.json`), body);
 };
 
+/** Gives the path of the managed worktree `dirName` for the repository `repoName`, in the worktree root of the sandbox. */
+export const managedPath = (dirName: string, repoName = 'aoyama'): string => path.join(activeSandbox().wtHome, 'worktrees', repoName, dirName);
+
+/** Gives the current branch of the checkout at `dir`. */
+export const headName = async (dir: string): Promise<string> => {
+  const out = await git(dir, 'rev-parse', '--abbrev-ref', 'HEAD');
+  return out.trim();
+};
+
+/** Makes the fake `gh pr view 7` answer with pull request 7 of `virtusize/aoyama`, whose head branch is `headRefName`. When `fork` is true, the pull request comes from a fork. */
+export const ghPrView = (headRefName = 'feature/x', { fork = false } = {}): void => {
+  ghFixture(
+    ['pr', 'view', '7', '--repo', 'virtusize/aoyama', '--json', 'number,headRefName,isCrossRepository'],
+    JSON.stringify({ headRefName, isCrossRepository: fork, number: 7 }),
+  );
+};
+
 /** Makes the fake `gh` answer the default-branch query for `nameWithOwner` with `branch`. */
 export const ghDefaultBranchFixture = (nameWithOwner: string, branch: string): void => {
   ghFixture(['repo', 'view', nameWithOwner, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'], `${branch}\n`);
@@ -222,7 +260,7 @@ export const spawnCli = (args: string[]) => {
   return { status: result.status, stderr: result.stderr, stdout: result.stdout };
 };
 
-/** The folder of the contract fixtures: each one is the parsed standard output of one real CLI call, which the Luau tests also read. */
+/** The folder of the contract fixtures, which the Luau tests also read. `argv.json` holds the arguments of each plugin call, and each other file is the parsed standard output of one real CLI call. */
 const CONTRACT_DIR = path.join(REPO_DIR, 'test', 'fixtures', 'contract');
 
 /** A parsed JSON value. */

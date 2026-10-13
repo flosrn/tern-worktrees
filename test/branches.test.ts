@@ -4,7 +4,22 @@ import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { run } from '../src/commands/branches.ts';
 import { worktreePath, worktreeRoot } from '../src/paths.ts';
 import type { RepoFixture, Sandbox } from './helpers.ts';
-import { cliJson, contract, ghDefaultBranchFixture, ghFixture, ghLog, git, gitShim, tempDir, tmpRepo, useGithubOrigin, useOmp, useSandbox } from './helpers.ts';
+import {
+  cliJson,
+  contract,
+  ghDefaultBranchFixture,
+  ghFixture,
+  ghLog,
+  git,
+  gitShim,
+  logGitCalls,
+  readLog,
+  tempDir,
+  tmpRepo,
+  useGithubOrigin,
+  useOmp,
+  useSandbox,
+} from './helpers.ts';
 
 const GITHUB_ORIGIN = 'git@github.com:me/aoyama.git';
 
@@ -232,6 +247,38 @@ describe('branches command', () => {
       const repo = await tmpRepo('aoyama');
       await gitShim(`case " $* " in *" for-each-ref "*) echo 'for-each-ref broke' >&2; exit 1;; esac`);
       await expect(run(['--repo', repo.dir])).rejects.toMatchObject({ code: 'git_failed', message: 'for-each-ref broke' });
+    });
+  });
+
+  describe('origin', () => {
+    it('reads the origin once online when origin/HEAD is unset', async () => {
+      const repo = await tmpRepo('aoyama');
+      await git(repo.dir, 'remote', 'set-head', 'origin', '--delete');
+      await git(repo.dir, 'config', 'remote.origin.followRemoteHEAD', 'never');
+      ghDefaultBranchFixture('me/aoyama', 'develop');
+      await useGithubOrigin(GITHUB_ORIGIN);
+      const log = await logGitCalls();
+      const result = await run(['--repo', repo.dir]);
+      expect(result.default).toBe('develop');
+      expect(readLog(log).filter(line => line.includes('remote get-url origin'))).toHaveLength(1);
+    });
+  });
+
+  describe('contract fixtures', () => {
+    it('answers branches through the CLI main function with the contract fixture', async () => {
+      const repo = await tmpRepo('app');
+      await pushDatedBranch(repo, 'x', '2030-01-01T00:00:00Z');
+      await useGithubOrigin(GITHUB_ORIGIN);
+      ghFixture(PR_LIST, JSON.stringify([{ headRefName: 'fix-login', isCrossRepository: false, number: 7, title: 'Fix login' }]));
+      const managed = worktreePath(await worktreeRoot(), 'app', 'x');
+      await git(repo.dir, 'worktree', 'add', '--quiet', managed, 'x');
+      await expect(cliJson(['branches', '--repo', repo.dir])).resolves.toStrictEqual(contract('branches', { repo: repo.dir, worktree: managed }));
+    });
+
+    it('answers branches --offline through the CLI main function with the contract fixture', async () => {
+      const repo = await tmpRepo('app');
+      await pushDatedBranch(repo, 'x', '2030-01-01T00:00:00Z');
+      await expect(cliJson(['branches', '--repo', repo.dir, '--offline'])).resolves.toStrictEqual(contract('branches-offline', { repo: repo.dir }));
     });
   });
 });

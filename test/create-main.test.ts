@@ -1,17 +1,11 @@
 import { existsSync } from 'node:fs';
-import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vite-plus/test';
 import { run } from '../src/commands/create.ts';
-import { cliJson, contract, ghFixture, git, ternLog, tmpRepo, useGithubOrigin, useSandbox, writeTernLs } from './helpers.ts';
+import { cliJson, contract, headName, ghPrView, git, managedPath, ternLog, tmpRepo, useGithubOrigin, useSandbox, writeTernLs } from './helpers.ts';
 import type { RepoFixture, Sandbox } from './helpers.ts';
 
 let sandbox: Sandbox;
 let repo: RepoFixture;
-
-const currentBranch = async (): Promise<string> => {
-  const out = await git(repo.dir, 'rev-parse', '--abbrev-ref', 'HEAD');
-  return out.trim();
-};
 
 describe('create command', () => {
   beforeEach(async () => {
@@ -25,7 +19,7 @@ describe('create command', () => {
       writeTernLs({ work: [repo.dir] });
       await expect(cliJson(['create', '--repo', repo.dir, '--branch', 'main', ...extra])).resolves.toStrictEqual(contract('create-main-checkout', { repo: repo.dir }));
       expect(ternLog()).toStrictEqual(['ls --json', 'focus 1 --json']);
-      await expect(currentBranch()).resolves.toBe('main');
+      await expect(headName(repo.dir)).resolves.toBe('main');
       await expect(git(repo.dir, 'worktree', 'list', '--porcelain')).resolves.not.toContain(sandbox.wtHome);
     });
 
@@ -34,15 +28,12 @@ describe('create command', () => {
       await expect(run(['--repo', repo.dir, '--branch', 'main', '--no-tab'])).resolves.toMatchObject({ owner: 'main', path: repo.dir, tab: null });
       expect(ternLog()).toStrictEqual([]);
       await expect(run(['--repo', repo.dir, '--branch', 'main'])).resolves.toMatchObject({ owner: 'main', path: repo.dir, tab: { block: 42, opened: true, session: 'aoyama' } });
-      expect(ternLog()).toStrictEqual(['ls --json', 'ls --json', `new session aoyama --cwd ${repo.dir} --json`, 'rename 42 main --json']);
+      expect(ternLog()).toStrictEqual(['ls --json', `new session aoyama --cwd ${repo.dir} --json`, 'rename 42 main --json']);
     });
 
     it('opens the main checkout where it is for a same-repo pull request of its branch', async () => {
       await useGithubOrigin();
-      ghFixture(
-        ['pr', 'view', '7', '--repo', 'virtusize/aoyama', '--json', 'number,headRefName,isCrossRepository'],
-        JSON.stringify({ headRefName: 'feature/x', isCrossRepository: false, number: 7 }),
-      );
+      ghPrView();
       await git(repo.dir, 'switch', '--quiet', '-c', 'feature/x');
       await expect(run(['--repo', repo.dir, '--pr', '7', '--no-tab'])).resolves.toStrictEqual({
         branch: 'feature/x',
@@ -55,7 +46,7 @@ describe('create command', () => {
         tab: null,
         warnings: [],
       });
-      expect(existsSync(path.join(sandbox.wtHome, 'worktrees', 'aoyama', 'feature-x'))).toBeFalsy();
+      expect(existsSync(managedPath('feature-x'))).toBeFalsy();
     });
   });
 });

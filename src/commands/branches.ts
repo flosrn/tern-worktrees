@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { fetchOrigin, gitMust, hasOrigin, requireRepoRoot, worktrees } from '../git.ts';
-import { defaultBranch, listPullRequests, originRepo } from '../github.ts';
+import { fetchOrigin, gitMust, requireRepoRoot, worktrees } from '../git.ts';
+import { defaultBranch, listPullRequests, readOrigin } from '../github.ts';
 import { worktreeOwner, worktreeRoot } from '../paths.ts';
 import type { WorktreeOwner } from '../paths.ts';
 import { CliError } from '../proc.ts';
@@ -49,8 +49,8 @@ interface OpenPullRequests {
 const REMOTE_PREFIX = 'refs/remotes/origin/';
 const LOCAL_PREFIX = 'refs/heads/';
 
-const listBranches = async (root: string, withOrigin: boolean): Promise<string[]> => {
-  const patterns = withOrigin ? ['refs/remotes/origin', 'refs/heads'] : ['refs/heads'];
+const listBranches = async (root: string, originPresent: boolean): Promise<string[]> => {
+  const patterns = originPresent ? ['refs/remotes/origin', 'refs/heads'] : ['refs/heads'];
   const output = await gitMust(root, 'for-each-ref', '--sort=-committerdate', '--format=%(refname)', ...patterns);
   const names = output
     .split('\n')
@@ -77,19 +77,19 @@ export const run = async (args: string[]): Promise<BranchesResult> => {
   const root = await requireRepoRoot(values.repo);
   const { offline } = values;
   const warnings: string[] = [];
-  const withOrigin = await hasOrigin(root);
-  if (withOrigin && !offline) {
+  const origin = await readOrigin(root);
+  if (origin.present && !offline) {
     const fetchWarning = await fetchOrigin(root, true);
     if (fetchWarning !== null) {
       warnings.push(fetchWarning);
     }
   }
-  const repoRef = offline ? null : await originRepo(root);
+  const repoRef = offline ? null : origin.github;
   const [branches, pullRequests, repoWorktrees, defaultName, wtRoot] = await Promise.all([
-    listBranches(root, withOrigin),
+    listBranches(root, origin.present),
     repoRef === null ? { failed: false, prs: [] } : openPullRequests(repoRef, warnings),
     worktrees(root),
-    defaultBranch(root, { offline }),
+    defaultBranch(root, repoRef),
     worktreeRoot(),
   ]);
   return {

@@ -2,7 +2,7 @@ import { cpSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { run } from '../src/commands/list.ts';
-import { git, logGitCalls, readLog, tempDir, tmpRepo, useOmp, useSandbox } from './helpers.ts';
+import { cliJson, contract, git, logGitCalls, readLog, tempDir, tmpRepo, useOmp, useSandbox } from './helpers.ts';
 import type { RepoFixture, Sandbox } from './helpers.ts';
 
 let sandbox: Sandbox;
@@ -33,6 +33,7 @@ describe('list command', () => {
     const dirty = await addWorktree(other, 'feature-y', '-b', 'feature/y');
     writeFileSync(path.join(dirty, 'junk.txt'), 'x\n');
     mkdirSync(path.join(worktreeRootDir(), 'aoyama', 'plain'));
+    mkdirSync(path.join(worktreeRootDir(), 'aoyama', 'broken', '.git'), { recursive: true });
     mkdirSync(path.join(clean, 'src'));
     writeFileSync(path.join(worktreeRootDir(), 'aoyama', 'note.txt'), 'x\n');
     symlinkSync(clean, path.join(worktreeRootDir(), 'aoyama', 'link'));
@@ -182,6 +183,18 @@ describe('list command', () => {
         warnings: [],
         worktrees: [{ branch: 'pr-7', changed: 0, dirty: false, owner: 'omp', path: mine, repo: repo.dir }],
       });
+    });
+
+    it('answers list --all through the CLI main function with the contract fixture', async () => {
+      const app = await tmpRepo('app');
+      const feat = path.join(base, 'app', 'feat');
+      const omp = path.join(base, '7-abc1234');
+      await git(app.dir, 'worktree', 'add', '--quiet', '-b', 'feat', feat, 'origin/main');
+      await git(app.dir, 'worktree', 'add', '--quiet', '--detach', omp, 'origin/main');
+      for (const name of ['a.txt', 'b.txt', 'c.txt']) {
+        writeFileSync(path.join(feat, name), 'x\n');
+      }
+      await expect(cliJson(['list', '--all'])).resolves.toStrictEqual(contract('list-all', { feat, omp, repo: app.dir, root: base }));
     });
   });
 

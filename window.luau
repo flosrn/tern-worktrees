@@ -24,6 +24,17 @@ local function remembered_root(): string?
 end
 
 local ROOT: string? = remembered_root()
+
+-- Sets the worktree root to the root of a `list --all` answer without a trailing `/`, and writes it to kv. Skips a
+-- root that is not a string, is empty, or is the same.
+local function learn_root(root: any)
+	local learned = if type(root) == "string" then without_trailing_slash(root) else nil
+	if learned ~= nil and learned ~= "" and learned ~= ROOT then
+		ROOT = learned
+		pcall(tern.kv.set, ROOT_KEY, learned)
+	end
+end
+
 local DEFAULT_KEYS = { "cmd+shift+w" }
 local POLICY = {
 	worktree = "removes worktree, keeps branch",
@@ -31,7 +42,8 @@ local POLICY = {
 	["worktree+branch"] = "removes worktree, deletes branch",
 }
 
-type CliCb<T> = (result: T, err: any, cx: WindowCx) -> ()
+type CliError = { code: string, message: string, [string]: any }
+type CliCb<T> = (result: T, err: CliError?, cx: WindowCx) -> ()
 type PullRequest = { number: number, title: string, branch: string }
 type BranchWorktree = { branch: string?, path: string, main: boolean? }
 type BranchesResult = {
@@ -91,7 +103,6 @@ local configWarned = false
 local rootOfDir: { [string]: string | false } = {}
 local cwdOfPane: { [number]: string? } = {}
 local resolving: { [string]: boolean } = {}
-local rootOfLiveRow: { [string]: string } = {}
 local refresh_branches: (cx: WindowCx, root: string) -> ()
 
 local function flush(cx: WindowCx)
@@ -103,6 +114,19 @@ end
 
 local CLI_OPTIONS = { timeout_ms = 120000 }
 
+-- Returns the `error` of the envelope of a failed run, or a new table when there is no `error`. It writes a string
+-- `code` and a string `message` into the result when they are missing.
+local function cli_error(decodedError: any, stderr: string): CliError
+	local err: CliError = if type(decodedError) == "table" then decodedError else {} :: any
+	if type(err.code) ~= "string" then
+		err.code = "cli_failed"
+	end
+	if type(err.message) ~= "string" then
+		err.message = if stderr ~= "" then stderr else "tern-wt failed"
+	end
+	return err
+end
+
 local function cli<T>(args: { string }, cb: CliCb<T>)
 	tern.process.run({ CLI, table.unpack(args) }, CLI_OPTIONS, function(r: ProcessResult, cx: WindowCx?)
 		if cx == nil then
@@ -110,9 +134,9 @@ local function cli<T>(args: { string }, cb: CliCb<T>)
 		end
 		local ok, decoded = pcall(tern.json.decode, r.stdout)
 		if not ok or type(decoded) ~= "table" then
-			cb(nil :: any, { code = "cli_failed", message = if r.stderr ~= "" then r.stderr else "tern-wt failed" }, cx)
+			cb(nil :: any, cli_error(nil, r.stderr), cx)
 		elseif r.status ~= 0 then
-			cb(nil :: any, decoded.error or { code = "cli_failed", message = r.stderr }, cx)
+			cb(nil :: any, cli_error(decoded.error, r.stderr), cx)
 		else
 			cb(decoded :: any, nil, cx)
 		end
@@ -177,7 +201,7 @@ local function write_index(nextIndex: { [string]: IndexEntry? })
 	end
 end
 
--- Sets or deletes one entry. Other windows write the same kv key, so this reads kv again and changes only `path`.
+-- Sets or deletes one entry. It reads kv again and changes only the entry of `path`.
 local function set_entry(path: string, entry: IndexEntry?)
 	local merged = table.clone(stored_index(worktreeIndex))
 	merged[path] = entry
@@ -202,11 +226,11 @@ local function managed_worktree(cwd: string?): string?
 	return if entry ~= nil and entry.owner == "tern" then path else nil
 end
 
--- Writes the managed worktrees of each tab with panes into `managed`, from the worktree index in memory.
-local function rebuild_managed(cx: WindowCx)
-	flush(cx)
+-- Returns the managed worktrees of each tab in `panes`, with no duplicates. A tab that has panes but no managed
+-- worktree maps to an empty list.
+local function managed_by_tab(panes: { PaneInfo }): { [number]: { string } }
 	local found: { [number]: { string } } = {}
-	for _, pane in ipairs(cx.session:panes()) do
+	for _, pane in ipairs(panes) do
 		local tab = pane.tab
 		if tab ~= nil then
 			local paths = found[tab] or {}
@@ -217,7 +241,12 @@ local function rebuild_managed(cx: WindowCx)
 			end
 		end
 	end
-	for tab, paths in pairs(found) do
+	return found
+end
+
+-- Writes the managed worktrees of each tab with panes into `managed`, from the worktree index in memory.
+local function rebuild_managed(panes: { PaneInfo })
+	for tab, paths in pairs(managed_by_tab(panes)) do
 		if #paths > 0 then
 			managed[tab] = paths
 		else
@@ -226,7 +255,14 @@ local function rebuild_managed(cx: WindowCx)
 	end
 end
 
+-- Shows the queued errors, then writes the managed worktrees of each tab of the session of `cx` into `managed`.
+local function refresh_managed(cx: WindowCx)
+	flush(cx)
+	rebuild_managed(cx.session:panes())
+end
+
 local function apply_list(res: ListResult, startedAt: number)
+	learn_root(res.root)
 	local fresh: { [string]: IndexEntry? } = {}
 	for _, w in ipairs(res.worktrees or {}) do
 		if type(w.path) == "string" and type(w.repo) == "string" then
@@ -250,9 +286,9 @@ end
 
 local refresh_index: () -> ()
 
--- Runs `list --all`, writes the worktree index from its answer, and passes the answer, or nil on an error, to `cb`.
--- When a later `list_all` starts before the answer, the answer is dropped and `cb` does not run.
-local function list_all(cb: (res: ListResult?, cx: WindowCx) -> ())
+-- Runs `list --all`, and writes the worktree index and the worktree root from its answer. When a later `list_all`
+-- starts before the answer comes, this call drops the answer.
+local function list_all()
 	local startedAt = tern.now()
 	listing = startedAt
 	listStartedAt = startedAt
@@ -263,9 +299,8 @@ local function list_all(cb: (res: ListResult?, cx: WindowCx) -> ())
 		listing = nil
 		if err == nil then
 			apply_list(res, startedAt)
-			rebuild_managed(cx2)
+			refresh_managed(cx2)
 		end
-		cb(if err == nil then res else nil, cx2)
 		if listAgain then
 			listAgain = false
 			refresh_index()
@@ -293,7 +328,7 @@ refresh_index = function()
 		end)
 		return
 	end
-	list_all(function() end)
+	list_all()
 end
 
 local function basename(path: string): string
@@ -401,19 +436,6 @@ local function switch_to(cx: WindowCx, sid: number?)
 	end
 end
 
-local function tab_paths(cx: WindowCx, tab: number): { string }
-	local paths: { string } = {}
-	for _, pane in ipairs(cx.session:panes()) do
-		if pane.tab == tab then
-			local path = managed_worktree(pane.cwd)
-			if path ~= nil and table.find(paths, path) == nil then
-				table.insert(paths, path)
-			end
-		end
-	end
-	return paths
-end
-
 local function close_tab(cx: WindowCx, tab: number)
 	local target: number? = nil
 	for _, pane in ipairs(cx.session:panes()) do
@@ -444,6 +466,18 @@ local function pane_under(cx: WindowCx, path: string, exceptTab: number?): boole
 		end
 	end
 	return false
+end
+
+-- Returns each path in `paths` that exists on disk and has no pane under it outside tab `exceptTab`. When `exceptTab`
+-- is nil, a path is kept only when no pane in any tab is under it.
+local function paths_to_ask(cx: WindowCx, paths: { string }, exceptTab: number?): { string }
+	local found: { string } = {}
+	for _, path in ipairs(paths) do
+		if tern.fs.exists(path) and not pane_under(cx, path, exceptTab) then
+			table.insert(found, path)
+		end
+	end
+	return found
 end
 
 local MAX_PATH = 72
@@ -513,19 +547,23 @@ end
 
 local MAX_LISTED_FILES = 10
 
-local function staging_line(err: any): string?
-	if err ~= nil and type(err.staging) == "string" then
+local function staging_line(err: CliError): string?
+	if type(err.staging) == "string" then
 		return "Saved files: " .. err.staging
 	end
 	return nil
 end
 
-local function toast_error(cx: WindowCx, err: any)
-	cx:toast("error", tostring(err and err.message or "tern-wt failed"), staging_line(err))
+local function toast_error(cx: WindowCx, err: CliError)
+	cx:toast("error", err.message, staging_line(err))
 end
 
-local function cli_or_else<T>(args: { string }, on_error: (cx: WindowCx, err: any) -> (), cb: (res: T, cx: WindowCx) -> ())
-	cli(args, function(res: T, err: any, cx: WindowCx)
+local function cli_or_else<T>(
+	args: { string },
+	on_error: (cx: WindowCx, err: CliError) -> (),
+	cb: (res: T, cx: WindowCx) -> ()
+)
+	cli(args, function(res: T, err: CliError?, cx: WindowCx)
 		if err ~= nil then
 			on_error(cx, err)
 			return
@@ -561,7 +599,7 @@ type DirtyListing = { changes: { string }, ignored: { string }, omitted: number 
 
 -- The files of a `dirty_worktree` error `err` that a toast shows: its `changes`, its `hardToRebuild` files as
 -- `ignored`, and how many of them the cap leaves out.
-local function list_dirty_files(err: any): DirtyListing
+local function list_dirty_files(err: CliError): DirtyListing
 	local shown: DirtyListing = { changes = {}, ignored = {}, omitted = 0 }
 	local changes: { string } = {}
 	local ignored: { string } = {}
@@ -604,10 +642,10 @@ end
 
 -- The cause of a failed `remove` of the worktree at `path`: the files with work to lose of a `dirty_worktree`, else
 -- the message with the folder name of the worktree in place of `path`, then the saved files when there are some.
-local function failure_message(err: any, path: string): string
+local function failure_message(err: CliError, path: string): string
 	local summary = if err.code == "dirty_worktree" then dirty_summary(list_dirty_files(err)) else ""
 	local parts: { string } = {
-		if summary ~= "" then summary else replace_plain(tostring(err.message), path, basename(path)),
+		if summary ~= "" then summary else replace_plain(err.message, path, basename(path)),
 	}
 	local saved = staging_line(err)
 	if saved ~= nil then
@@ -836,9 +874,14 @@ local function fill_fresh_tab(cx: WindowCx, freshTab: number?, parked: number?):
 	return freshTab, nil
 end
 
--- Opens or focuses the tab of the worktree of `res`. Returns the pane of a new shell in it, or nil and the reason
--- that no new shell opened: no tab opened, the tab was open before, or the tab holds no new shell.
-local function open_tab(cx: WindowCx, res: CreateResult): (number?, string?)
+-- The outcome of `open_tab`:
+-- - `shell`: a new shell opened in the tab, in the pane `pane`.
+-- - `no_shell`: no new shell opened; `reason` tells why.
+type TabOutcome = { kind: "shell", pane: number } | { kind: "no_shell", reason: string }
+
+-- Opens or focuses the tab of the worktree of `res`. Returns a TabOutcome: the pane of a new shell in the tab, or the
+-- reason that no new shell opened: no tab opened, the tab was open before, or the tab holds no new shell.
+local function open_tab(cx: WindowCx, res: CreateResult): TabOutcome
 	local path = res.path
 	local plan = place(path, res.repo, cx.session:panes(), session_index(cx), reposOfSession)
 	local tab: number? = nil
@@ -867,70 +910,56 @@ local function open_tab(cx: WindowCx, res: CreateResult): (number?, string?)
 	if tab ~= nil and plan.kind ~= "open" then
 		cx.layout:name_tab(tab, res.branch)
 	end
-	if tab ~= nil and res.owner == "tern" then
-		local paths = managed[tab] or {}
-		managed[tab] = paths
-		if table.find(paths, path) == nil then
-			table.insert(paths, path)
-		end
+	if tab ~= nil then
+		rebuild_managed(cx.session:panes())
 	end
 	if shellPane ~= nil then
-		return shellPane, nil
+		return { kind = "shell", pane = shellPane }
 	elseif tab == nil then
-		return nil, "no tab opened"
+		return { kind = "no_shell", reason = "no tab opened" }
 	elseif plan.kind == "open" then
-		return nil, "the tab was open before"
+		return { kind = "no_shell", reason = "the tab was open before" }
 	end
-	return nil, "no new shell in the tab"
+	return { kind = "no_shell", reason = "no new shell in the tab" }
 end
 
 local SETUP_POLL_MS = 200
 local SETUP_PROMPT_MS = 30000
 
--- Types `setup.line` into the shell `pane` when the shell shows its prompt. It polls every SETUP_POLL_MS, for a
--- maximum of SETUP_PROMPT_MS. It does nothing when `create` typed the line already, and stops when
--- the pane is gone. When `pane` is nil, it only shows the line in a toast with `noShellReason`.
--- `done`, when set, runs once with the outcome: true once the line is typed (or `create` typed it), false
--- with the toast text when it gives up, and false with no text when the pane or the cx is gone.
+-- Types `line` into the shell of `outcome` when the shell shows its prompt. It polls every SETUP_POLL_MS, for a
+-- maximum of SETUP_PROMPT_MS, and stops when the shell pane is gone. When `outcome` is `no_shell`, it only shows
+-- the line in a toast with `outcome.reason`.
+-- `done` runs once with the result: true once the line is typed, false with the toast text when it gives up, and
+-- false with no text when the pane or the cx is gone.
 local function type_setup(
 	cx: WindowCx,
-	pane: number?,
-	noShellReason: string?,
-	setup: SetupLine?,
-	done: ((typed: boolean, warning: string?) -> ())?
+	outcome: TabOutcome,
+	line: string,
+	done: (typed: boolean, warning: string?) -> ()
 )
-	local function finish(typed: boolean, warning: string?)
-		if done ~= nil then
-			done(typed, warning)
-		end
-	end
-	if setup == nil or setup.typed then
-		finish(setup ~= nil, nil)
-		return
-	end
-	local line = setup.line
 	local function give_up(cx2: WindowCx, warning: string)
 		cx2:toast("error", sentence_case(warning), line)
-		finish(false, warning)
+		done(false, warning)
 	end
-	if pane == nil then
-		give_up(cx, "setup not run: " .. (noShellReason or "no tab opened"))
+	if outcome.kind == "no_shell" then
+		give_up(cx, "setup not run: " .. outcome.reason)
 		return
 	end
+	local pane = outcome.pane
 	local deadline = tern.now() + SETUP_PROMPT_MS
 	local function poll(cx2: WindowCx?)
 		if cx2 == nil then
-			finish(false, nil)
+			done(false, nil)
 			return
 		end
 		local info = cx2.session:pane(pane)
 		if info == nil then
-			finish(false, nil)
+			done(false, nil)
 			return
 		end
 		if info.at_prompt then
 			cx2:run(pane, line .. "\r")
-			finish(true, nil)
+			done(true, nil)
 		elseif tern.now() >= deadline then
 			give_up(cx2, "setup not run: no shell prompt in " .. SETUP_PROMPT_MS // 1000 .. " s")
 		else
@@ -942,11 +971,11 @@ end
 
 -- The CLI made, reused or relocated the worktree of `res`, or gave the main checkout. Writes the entry of a worktree in
 -- the worktree index, resolves the sessions, opens or focuses its tab, refreshes its repository, runs `opened`, then
--- starts to type its setup line. The index holds only worktrees in the worktree root, so the main checkout gets no
--- entry.
+-- starts to type its setup line. The main checkout gets no entry.
 -- `opened`, when set, runs once with the cx that `resolve_sessions` gave. `settled`, when set, runs once when the
--- setup step ends, or at once when the tab step raises; `res.setup.typed` and `res.warnings` then hold the outcome.
--- A tab step that raises adds the warning `tab not opened: <error>`, and then no setup step runs.
+-- setup step ends, or at once when `open_tab` raises or `res.setup` is nil. Then `res.warnings` and, when `res.setup`
+-- is set, `res.setup.typed` hold the result.
+-- An `open_tab` that raises adds the warning `tab not opened: <error>`, and then no setup step runs.
 local function worktree_opened(
 	cx: WindowCx,
 	res: CreateResult,
@@ -966,23 +995,21 @@ local function worktree_opened(
 		set_entry(res.path, { main = res.repo, branch = res.branch, changed = 0, owner = res.owner })
 	end
 	resolve_sessions(cx, function(cx2)
-		local ok, paneOrErr, noShellReason = pcall(open_tab, cx2, res)
+		local ok, outcomeOrErr = pcall(open_tab, cx2, res)
 		if not ok then
-			add_warning("tab not opened: " .. tostring(paneOrErr))
+			add_warning("tab not opened: " .. tostring(outcomeOrErr))
 		end
 		refresh_branches(cx2, res.repo)
 		if opened ~= nil then
 			opened(cx2)
 		end
-		if not ok then
+		local setup = res.setup
+		if not ok or setup == nil then
 			settle()
 			return
 		end
-		local setup = res.setup
-		type_setup(cx2, paneOrErr, noShellReason, setup, function(typed, warning)
-			if setup ~= nil then
-				setup.typed = typed
-			end
+		type_setup(cx2, outcomeOrErr :: TabOutcome, setup.line, function(typed, warning)
+			setup.typed = typed
 			if warning ~= nil then
 				add_warning(warning)
 			end
@@ -998,26 +1025,31 @@ local function worktree_torn_down(cx: WindowCx, removed: string, repo: string)
 end
 
 -- Where the branch of a create is checked out before the create: nowhere (`new`), in a worktree (`worktree`) or in
--- the main checkout (`main`). It selects the progress toast only.
+-- the main checkout (`main`).
 type Checkout = "new" | "worktree" | "main"
+
+-- The kind of a create: a `Checkout`, or `relocate` after the user picks Relocate on a `worktree_exists_elsewhere`
+-- error. The kind selects the progress toast. `relocate` also adds `--relocate` to the argv.
+type CreateKind = Checkout | "relocate"
 
 local function create(
 	cx: WindowCx,
 	root: string,
 	extra: { string },
 	name: string,
-	checkout: Checkout,
+	kind: CreateKind,
 	retry: ((cx: WindowCx) -> ())?
 )
 	local args = { "create", "--repo", root, "--no-tab" }
 	for _, a in ipairs(extra) do
 		table.insert(args, a)
 	end
-	if table.find(extra, "--relocate") then
+	if kind == "relocate" then
+		table.insert(args, "--relocate")
 		cx:toast("info", "Relocating worktree " .. name .. "…")
-	elseif checkout == "main" then
+	elseif kind == "main" then
 		cx:toast("info", "Opening main checkout…")
-	elseif checkout == "worktree" then
+	elseif kind == "worktree" then
 		cx:toast("info", "Reusing worktree " .. name .. "…")
 	else
 		cx:toast("info", "Creating worktree " .. name .. "…")
@@ -1025,7 +1057,7 @@ local function create(
 	cli(args, function(res: CreateResult, err, cx2)
 		if err ~= nil then
 			if err.code == "bad_args" and retry ~= nil then
-				cx2:toast("error", tostring(err.message))
+				cx2:toast("error", err.message)
 				retry(cx2)
 			elseif err.code == "worktree_exists_elsewhere" then
 				local existing = tostring(err.existing)
@@ -1041,9 +1073,7 @@ local function create(
 					},
 				}, function(id, cx3)
 					if id == "relocate" then
-						local again = table.clone(extra)
-						table.insert(again, "--relocate")
-						create(cx3, root, again, name, "worktree")
+						create(cx3, root, extra, name, "relocate")
 					end
 				end)
 			elseif err.code == "dirty_worktree" then
@@ -1070,54 +1100,65 @@ local function create(
 	end)
 end
 
-local function add_row(
-	root: string,
-	id: string,
-	title: string,
+-- One pull request or branch of a `branches` answer, as the branch picker, the worktree rows and `create` see it.
+-- `pickId` is the id of the picker item. The worktree row id is a hash of `rowKey`. `branch` is the branch name that
+-- the progress toast shows.
+type BranchTarget = {
+	pickId: string,
+	rowKey: string,
+	branch: string,
 	createArgs: { string },
-	name: string,
 	checkout: Checkout,
-	ids: { string }
-)
-	rootOfLiveRow[id] = root
-	table.insert(ids, id)
-	tern.command({
-		id = id,
-		title = title,
-		icon = "branch",
-		group = "Worktrees",
-		available = function(cx: WindowCx): boolean
-			if rootOfLiveRow[id] ~= root then
-				return false
-			end
-			local focused = cx.session:focused()
-			local cwd = if focused ~= nil then cwdOfPane[focused] else nil
-			return cwd ~= nil and rootOfDir[cwd] == root
-		end,
-		run = function(cx: WindowCx)
-			create(cx, root, createArgs, name, checkout)
-		end,
-	})
-end
+	pickLabel: string,
+	rowLabel: string,
+	detail: string?,
+	group: string,
+	icon: string,
+}
 
-local function pr_label(pr: PullRequest): string
-	return "#" .. tostring(pr.number) .. " " .. tostring(pr.title)
-end
-
--- Where each branch of `res` with a checkout is checked out: `worktree` or `main`. A branch without one is not a key.
-local function branch_checkouts(res: BranchesResult): { [string]: Checkout }
+-- The targets of `res`: the pull requests, then the branches, each in the order of `res`.
+local function branch_targets(res: BranchesResult): { BranchTarget }
 	local checkouts: { [string]: Checkout } = {}
 	for _, w in ipairs(res.worktrees or {}) do
 		if type(w.branch) == "string" then
 			checkouts[w.branch] = if w.main == true then "main" else "worktree"
 		end
 	end
-	return checkouts
-end
-
--- The checkout of `branch` in `checkouts`, `new` when it has none.
-local function checkout_of(checkouts: { [string]: Checkout }, branch: string): Checkout
-	return checkouts[branch] or "new"
+	local targets: { BranchTarget } = {}
+	for _, pr in ipairs(res.prs or {}) do
+		local n = tostring(pr.number)
+		local branch = tostring(pr.branch)
+		local label = "#" .. n .. " " .. tostring(pr.title)
+		table.insert(targets, {
+			pickId = "pr:" .. n,
+			rowKey = "pr:" .. n,
+			branch = branch,
+			createArgs = { "--pr", n },
+			checkout = checkouts[branch] or "new",
+			pickLabel = label .. " · " .. branch,
+			rowLabel = label,
+			detail = nil,
+			group = "Pull requests",
+			icon = "merge",
+		})
+	end
+	for _, branch in ipairs(res.branches or {}) do
+		local checkout: Checkout = checkouts[branch] or "new"
+		local inWorktree = checkout == "worktree"
+		table.insert(targets, {
+			pickId = "b:" .. branch,
+			rowKey = branch,
+			branch = branch,
+			createArgs = { "--branch=" .. branch },
+			checkout = checkout,
+			pickLabel = branch,
+			rowLabel = branch .. (if inWorktree then " · worktree" else ""),
+			detail = if inWorktree then "worktree" else nil,
+			group = "Branches",
+			icon = "branch",
+		})
+	end
+	return targets
 end
 
 local function remember_cwd(pane: number, cwd: string?)
@@ -1171,28 +1212,20 @@ local function new_branch(cx: WindowCx, root: string, repoName: string, defaultB
 	end)
 end
 
--- The items of the branch picker for `res`: `New branch…`, `Other repo…`, the pull requests, then the branches.
-local function branch_picker_items(res: BranchesResult): { PickItem }
-	local checkouts = branch_checkouts(res)
+-- The items of the branch picker: `New branch…` from `defaultBranch`, `Other repo…`, then one item for each of
+-- `targets`.
+local function branch_picker_items(defaultBranch: string, targets: { BranchTarget }): { PickItem }
 	local items: { PickItem } = {
-		{ id = "new", label = "New branch…", detail = "from " .. tostring(res.default), icon = "plus" },
+		{ id = "new", label = "New branch…", detail = "from " .. defaultBranch, icon = "plus" },
 		{ id = "other", label = "Other repo…", icon = "folder" },
 	}
-	for _, pr in ipairs(res.prs or {}) do
+	for _, target in ipairs(targets) do
 		table.insert(items, {
-			id = "pr:" .. tostring(pr.number),
-			label = pr_label(pr) .. " · " .. tostring(pr.branch),
-			group = "Pull requests",
-			icon = "merge",
-		})
-	end
-	for _, branch in ipairs(res.branches or {}) do
-		table.insert(items, {
-			id = "b:" .. branch,
-			label = branch,
-			detail = if checkouts[branch] == "worktree" then "worktree" else nil,
-			group = "Branches",
-			icon = "branch",
+			id = target.pickId,
+			label = target.pickLabel,
+			detail = target.detail,
+			group = target.group,
+			icon = target.icon,
 		})
 	end
 	return items
@@ -1201,7 +1234,8 @@ end
 -- Whether the branch picker shows the same items for `a` and `b`, in the same order: the same ids, labels, dim text
 -- and groups.
 local function same_branch_picker_items(a: BranchesResult, b: BranchesResult): boolean
-	local itemsA, itemsB = branch_picker_items(a), branch_picker_items(b)
+	local itemsA = branch_picker_items(tostring(a.default), branch_targets(a))
+	local itemsB = branch_picker_items(tostring(b.default), branch_targets(b))
 	if #itemsA ~= #itemsB then
 		return false
 	end
@@ -1218,12 +1252,8 @@ end
 local function show_branch_picker(cx: WindowCx, root: string, res: BranchesResult)
 	local repoName = tostring(res.name)
 	local defaultBranch = tostring(res.default)
-	local items = branch_picker_items(res)
-	local checkouts = branch_checkouts(res)
-	local branchOfPr: { [string]: string } = {}
-	for _, p in ipairs(res.prs or {}) do
-		branchOfPr[tostring(p.number)] = tostring(p.branch)
-	end
+	local targets = branch_targets(res)
+	local items = branch_picker_items(defaultBranch, targets)
 	choose(
 		cx,
 		{ placeholder = "Search branches in " .. repoName, icon = "branch", action = "open", items = items },
@@ -1231,17 +1261,17 @@ local function show_branch_picker(cx: WindowCx, root: string, res: BranchesResul
 			if id == nil then
 				return
 			end
-			local branch = string.match(id, "^b:(.*)$")
-			local pr = string.match(id, "^pr:(.*)$")
 			if id == "new" then
 				new_branch(cx2, root, repoName, defaultBranch)
 			elseif id == "other" then
 				repo_picker(cx2)
-			elseif branch ~= nil then
-				create(cx2, root, { "--branch=" .. branch }, branch, checkout_of(checkouts, branch))
-			elseif pr ~= nil then
-				local prBranch = branchOfPr[pr] or ("#" .. pr)
-				create(cx2, root, { "--pr", pr }, prBranch, checkout_of(checkouts, prBranch))
+			else
+				for _, target in ipairs(targets) do
+					if target.pickId == id then
+						create(cx2, root, target.createArgs, target.branch, target.checkout)
+						break
+					end
+				end
 			end
 		end
 	)
@@ -1263,8 +1293,8 @@ type BranchesStore = {
 	openFor: number?,
 }
 local storeOfRoot: { [string]: BranchesStore } = {}
--- The ids of the worktree rows of each repository root.
-local rowsOfRoot: { [string]: { string } } = {}
+-- The ids of the worktree rows in the last `branches` answer of each repository root; `available` shows only these.
+local liveRowsOfRoot: { [string]: { [string]: true } } = {}
 
 -- The answer to keep after `res`: an offline answer keeps the pull requests and the default branch of `before`, and an
 -- online answer with `prsFailed` keeps the pull requests of `before`.
@@ -1293,45 +1323,30 @@ end
 local function register_rows(root: string, res: BranchesResult)
 	local name: string = if type(res.name) == "string" then res.name else basename(root)
 	local prefix = "wt-" .. fnv1a(root) .. "-"
-	local checkouts = branch_checkouts(res)
-	local ids: { string } = {}
-	for _, pr in ipairs(res.prs or {}) do
-		local n = tostring(pr.number)
-		local prBranch = tostring(pr.branch)
-		add_row(
-			root,
-			prefix .. fnv1a("pr:" .. n),
-			name .. ": " .. pr_label(pr),
-			{ "--pr", n },
-			prBranch,
-			checkout_of(checkouts, prBranch),
-			ids
-		)
+	local live: { [string]: true } = {}
+	for _, target in ipairs(branch_targets(res)) do
+		local id = prefix .. fnv1a(target.rowKey)
+		live[id] = true
+		tern.command({
+			id = id,
+			title = name .. ": " .. target.rowLabel,
+			icon = "branch",
+			group = "Worktrees",
+			available = function(cx: WindowCx): boolean
+				local rows = liveRowsOfRoot[root]
+				if rows == nil or rows[id] == nil then
+					return false
+				end
+				local focused = cx.session:focused()
+				local cwd = if focused ~= nil then cwdOfPane[focused] else nil
+				return cwd ~= nil and rootOfDir[cwd] == root
+			end,
+			run = function(cx: WindowCx)
+				create(cx, root, target.createArgs, target.branch, target.checkout)
+			end,
+		})
 	end
-	for _, branch in ipairs(res.branches or {}) do
-		if type(branch) == "string" then
-			local title = name .. ": " .. branch .. (if checkouts[branch] == "worktree" then " · worktree" else "")
-			add_row(
-				root,
-				prefix .. fnv1a(branch),
-				title,
-				{ "--branch", branch },
-				branch,
-				checkout_of(checkouts, branch),
-				ids
-			)
-		end
-	end
-	local currentIds: { [string]: boolean } = {}
-	for _, id in ipairs(ids) do
-		currentIds[id] = true
-	end
-	for _, id in ipairs(rowsOfRoot[root] or {}) do
-		if not currentIds[id] then
-			rootOfLiveRow[id] = nil
-		end
-	end
-	rowsOfRoot[root] = ids
+	liveRowsOfRoot[root] = live
 end
 
 local function fetch_interval_ms(cx: WindowCx): number
@@ -1384,12 +1399,12 @@ local function apply_branches(cx: WindowCx, root: string, store: BranchesStore, 
 end
 
 -- Shows the toasts of the failed `run`. With no online answer in `store`, the press that waits for it stops waiting.
-local function fail_branches(cx: WindowCx, store: BranchesStore, run: BranchesRun, err: any)
+local function fail_branches(cx: WindowCx, store: BranchesStore, run: BranchesRun, err: CliError)
 	if not run.notify then
 		return
 	end
 	if store.online then
-		cx:toast("error", "Branch refresh failed: " .. tostring(err.message or "tern-wt failed"))
+		cx:toast("error", "Branch refresh failed: " .. err.message)
 	else
 		store.openFor = nil
 		toast_error(cx, err)
@@ -1735,7 +1750,6 @@ local function confirm_teardown(cx: WindowCx, tab: number?, paths: { string }, i
 	end
 	local placeholderPrefix = if tab ~= nil then "Closing worktree tab · " else "Worktree tab closed · "
 	local keepDetail = if tab ~= nil then "closes the tab, keeps the worktree" else "keeps the worktree"
-	-- `choose` already toasts a pick error. A pick error counts as Keep, so the tab closes even when the picker fails.
 	choose(cx, {
 		placeholder = placeholderPrefix .. short_path(path),
 		icon = "branch",
@@ -1771,12 +1785,7 @@ local function intercept(cx: WindowCx, tab: number?): boolean
 	if tab == nil then
 		return false
 	end
-	local paths: { string } = {}
-	for _, path in ipairs(tab_paths(cx, tab)) do
-		if tern.fs.exists(path) and not pane_under(cx, path, tab) then
-			table.insert(paths, path)
-		end
-	end
+	local paths = paths_to_ask(cx, managed_by_tab(cx.session:panes())[tab] or {}, tab)
 	if #paths == 0 then
 		return false
 	end
@@ -1793,8 +1802,7 @@ tern.command({
 })
 
 -- The worktree segment shows the branch and the number of changed files of the worktree of the focused pane. It
--- reads only the worktree index. Tern disables a formatter that takes more than 4 ms, and `tern.chrome.refresh`
--- raises an error when a formatter calls it.
+-- reads only the worktree index.
 tern.chrome.status(function(pane: StatusPaneInfo): { StatusSegment }?
 	local _, entry = index_lookup(pane.cwd)
 	if entry == nil then
@@ -1833,13 +1841,13 @@ tern.override("close_pane", function(cx: WindowCx): boolean?
 	return false
 end)
 
--- Tern has no install hook, so each load of the window half runs `tern-wt setup`: a window start, a reload, and an
+-- Each load of the window half runs `tern-wt setup`: a window start, a reload, and an
 -- install into an open window. A timer starts it after the load. It links `tern-wt` and the skill to the copy of the
 -- plugin that Tern loaded, and tells the user only when a link changed or setup failed.
 local function link_cli_and_skill()
 	cli({ "setup" }, function(res: SetupResult, err, cx)
 		if err ~= nil then
-			cx:toast("error", "Setup failed: " .. tostring(err.message or "tern-wt failed"))
+			cx:toast("error", "Setup failed: " .. err.message)
 			return
 		end
 		for _, link in ipairs(res.links or {}) do
@@ -1854,7 +1862,7 @@ end
 tern.timer(0, link_cli_and_skill)
 
 tern.on("window_start", function(cx: WindowCx)
-	rebuild_managed(cx)
+	refresh_managed(cx)
 	for _, pane in ipairs(cx.session:panes()) do
 		remember_cwd(pane.pane, pane.cwd)
 	end
@@ -1863,18 +1871,12 @@ tern.on("window_start", function(cx: WindowCx)
 			refresh_branches(cx2, repo.root)
 		end
 	end)
-	list_all(function(res, _cx2)
-		local learned = if res ~= nil and type(res.root) == "string" then without_trailing_slash(res.root) else nil
-		if learned ~= nil and learned ~= "" and learned ~= ROOT then
-			ROOT = learned
-			pcall(tern.kv.set, ROOT_KEY, learned)
-		end
-	end)
+	list_all()
 end)
 
 for _, name in ipairs({ "tab_created", "pane_created" }) do
 	tern.on(name, function(_ev: any, cx: WindowCx)
-		rebuild_managed(cx)
+		refresh_managed(cx)
 		local root = ROOT
 		if root == nil then
 			return
@@ -1889,7 +1891,7 @@ for _, name in ipairs({ "tab_created", "pane_created" }) do
 end
 
 tern.on("cwd", function(ev: CwdEvent, cx: WindowCx)
-	rebuild_managed(cx)
+	refresh_managed(cx)
 	remember_cwd(ev.pane, ev.path)
 	if ev.pane == cx.session:focused() then
 		refresh_dir(cx, ev.path)
@@ -1936,13 +1938,14 @@ tern.on("tab_closed", function(ev: TabEvent, cx: WindowCx)
 	if paths == nil then
 		return
 	end
-	local open: { string } = {}
+	local unhandled: { string } = {}
 	for _, path in ipairs(paths) do
-		if not handled[path] and tern.fs.exists(path) and not pane_under(cx, path, nil) then
-			table.insert(open, path)
+		if not handled[path] then
+			table.insert(unhandled, path)
 		end
 		handled[path] = nil
 	end
+	local open = paths_to_ask(cx, unhandled, nil)
 	if #open > 0 then
 		ask_teardown(cx, nil, open)
 	end
@@ -1958,8 +1961,8 @@ local function export_args(...: any): ({ any }, WindowCx, any)
 	return args, cx, call
 end
 
-local function err_text(err: any): string
-	return tostring(err.code) .. ": " .. tostring(err.message)
+local function err_text(err: CliError): string
+	return err.code .. ": " .. err.message
 end
 
 local function reply_to<T>(call: any): CliCb<T>
@@ -1981,7 +1984,7 @@ tern.carly.export("create", {
 	if type(repo) ~= "string" or type(branch) ~= "string" then
 		error("create: repo and branch must be strings", 0)
 	end
-	local argv = { "create", "--repo", repo, "--branch", branch, "--no-tab" }
+	local argv = { "create", "--repo", repo, "--no-tab", "--branch=" .. branch }
 	if isNew == true then
 		table.insert(argv, "--new")
 	end
