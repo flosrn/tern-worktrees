@@ -28,7 +28,13 @@ describe('config', () => {
 
   describe(loadConfig, () => {
     it('gives the defaults without a file', () => {
-      expect(loadConfig()).toStrictEqual({ cloneRoot: '/home/me/Developer', hotkeys: { new: ['cmd+shift+w'] }, setup: {}, teardown: 'worktree+merged-branch' });
+      expect(loadConfig()).toStrictEqual({
+        cloneRoot: '/home/me/Developer',
+        hotkeys: { new: ['cmd+shift+w'] },
+        issueBranch: { fixLabels: ['bug', 'fix', 'regression', 'hotfix'], linkOnGitHub: false },
+        setup: {},
+        teardown: 'worktree+merged-branch',
+      });
     });
 
     it('gives fresh default arrays', () => {
@@ -61,7 +67,26 @@ describe('config', () => {
       ],
     ])('overrides only the keys in %s', (text, expected) => {
       write(text);
-      expect(loadConfig()).toStrictEqual(expected);
+      expect(loadConfig()).toStrictEqual({ ...expected, issueBranch: { fixLabels: ['bug', 'fix', 'regression', 'hotfix'], linkOnGitHub: false } });
+    });
+
+    it.each([
+      ['{}', { fixLabels: ['bug', 'fix', 'regression', 'hotfix'], linkOnGitHub: false }],
+      ['{"fixLabels":["Defect","urgent"]}', { fixLabels: ['Defect', 'urgent'], linkOnGitHub: false }],
+      ['{"fixLabels":[]}', { fixLabels: [], linkOnGitHub: false }],
+      ['{"linkOnGitHub":true}', { fixLabels: ['bug', 'fix', 'regression', 'hotfix'], linkOnGitHub: true }],
+      ['{"fixLabels":["custom"],"linkOnGitHub":false}', { fixLabels: ['custom'], linkOnGitHub: false }],
+    ])('reads issue branch options from %s', (options, expected) => {
+      write(`{"issueBranch":${options}}`);
+      expect(loadConfig().issueBranch).toStrictEqual(expected);
+    });
+
+    it('gives fresh default fix labels for missing and partial issue branch options', () => {
+      loadConfig().issueBranch.fixLabels.push('first');
+      write('{"issueBranch":{}}');
+      expect(loadConfig().issueBranch.fixLabels).toStrictEqual(['bug', 'fix', 'regression', 'hotfix']);
+      loadConfig().issueBranch.fixLabels.push('second');
+      expect(loadConfig().issueBranch.fixLabels).toStrictEqual(['bug', 'fix', 'regression', 'hotfix']);
     });
 
     it('rejects invalid JSON', () => {
@@ -100,6 +125,16 @@ describe('config', () => {
       ['{"hotkeys":{"new":"ctrl+b>w"}}', 'hotkeys.new: expected an array of strings'],
       ['{"hotkeys":{"new":["ctrl+b>w",2]}}', 'hotkeys.new: expected an array of strings'],
       ['{"hotkeys":{"new":[],"close":[]}}', 'hotkeys.close: unknown key'],
+      ['{"issueBranch":null}', 'issueBranch: expected an object'],
+      ['{"issueBranch":[]}', 'issueBranch: expected an object'],
+      ['{"issueBranch":true}', 'issueBranch: expected an object'],
+      ['{"issueBranch":{"fixLabels":"bug"}}', 'issueBranch.fixLabels: expected an array of strings'],
+      ['{"issueBranch":{"fixLabels":["bug",2]}}', 'issueBranch.fixLabels: expected an array of strings'],
+      ['{"issueBranch":{"fixLabels":null}}', 'issueBranch.fixLabels: expected an array of strings'],
+      ['{"issueBranch":{"linkOnGitHub":"true"}}', 'issueBranch.linkOnGitHub: expected a boolean'],
+      ['{"issueBranch":{"linkOnGitHub":0}}', 'issueBranch.linkOnGitHub: expected a boolean'],
+      ['{"issueBranch":{"linkOnGitHub":null}}', 'issueBranch.linkOnGitHub: expected a boolean'],
+      ['{"issueBranch":{"extra":true}}', 'issueBranch.extra: unknown key'],
       ['{"setup":[]}', 'setup: expected an object'],
       ['{"setup":null}', 'setup: expected an object'],
       ['{"setup":"npm ci"}', 'setup: expected an object'],

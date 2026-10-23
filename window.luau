@@ -57,6 +57,7 @@ type BranchesResult = {
 }
 type SetupLine = { line: string, typed: boolean }
 type CreateResult = {
+	issue: { number: number, url: string, title: string }?,
 	branch: string,
 	carried: { string },
 	owner: "tern" | "omp" | "main",
@@ -68,7 +69,7 @@ type CreateResult = {
 }
 type GithubRepo = { nameWithOwner: string, description: string? }
 type ReposResult = { owners: { string }, repos: { GithubRepo } }
-type ResolvedDir = { dir: string, root: string?, name: string? }
+type ResolvedDir = { dir: string, root: string?, name: string?, origin: string? }
 type ResolveResult = { repos: { ResolvedDir } }
 type RemoveResult = {
 	removed: string,
@@ -88,7 +89,7 @@ type SessionIndex = {
 	byTab: { [number]: SessionInfo },
 	current: SessionInfo?,
 }
-type Repo = { root: string, name: string }
+type Repo = { root: string, name: string, origin: string? }
 -- The repositories of a session: `first`, the root of the first pane, in pane order, of its tabs; `shown`, the root
 -- of each pane in its tabs; and `main`, the root of each pane in its tabs that is in the main checkout of that root.
 type SessionRepos = { first: string, shown: { [string]: boolean }, main: { [string]: boolean } }
@@ -754,7 +755,7 @@ local function resolve_sessions(cx: WindowCx, cb: (cx: WindowCx) -> ())
 			local repoRoot = r.root
 			if type(repoRoot) == "string" and not listedRoots[repoRoot] then
 				listedRoots[repoRoot] = true
-				table.insert(localRepos, { root = repoRoot, name = r.name or basename(repoRoot) })
+				table.insert(localRepos, { root = repoRoot, name = r.name or basename(repoRoot), origin = r.origin })
 			end
 		end
 		local repos = repos_of_sessions(cx2.session:panes(), session_index(cx2), rootOfDir, reposOfSession)
@@ -1034,13 +1035,19 @@ type CreateKind = Checkout | "relocate"
 
 local function create(
 	cx: WindowCx,
-	root: string,
+	root: string?,
 	extra: { string },
 	name: string,
 	kind: CreateKind,
-	retry: ((cx: WindowCx) -> ())?
+	retry: ((cx: WindowCx) -> ())?,
+	notCloned: ((cx: WindowCx, err: CliError) -> ())?
 )
-	local args = { "create", "--repo", root, "--no-tab" }
+	local args = { "create" }
+	if root ~= nil then
+		table.insert(args, "--repo")
+		table.insert(args, root)
+	end
+	table.insert(args, "--no-tab")
 	for _, a in ipairs(extra) do
 		table.insert(args, a)
 	end
@@ -1056,7 +1063,9 @@ local function create(
 	end
 	cli(args, function(res: CreateResult, err, cx2)
 		if err ~= nil then
-			if err.code == "bad_args" and retry ~= nil then
+			if err.code == "not_cloned" and notCloned ~= nil then
+				notCloned(cx2, err)
+			elseif err.code == "bad_args" and retry ~= nil then
 				cx2:toast("error", err.message)
 				retry(cx2)
 			elseif err.code == "worktree_exists_elsewhere" then
@@ -1073,7 +1082,7 @@ local function create(
 					},
 				}, function(id, cx3)
 					if id == "relocate" then
-						create(cx3, root, extra, name, "relocate")
+						create(cx3, root, extra, name, "relocate", retry, notCloned)
 					end
 				end)
 			elseif err.code == "dirty_worktree" then
@@ -1196,6 +1205,115 @@ end
 
 local repo_picker: (cx: WindowCx) -> ()
 
+type IssueRef = { repo: string?, number: string, kind: "issue" | "pr" }
+
+local function issue_ref(text: string, cb: (ref: IssueRef?, cx: WindowCx) -> ())
+	cli_or_toast({ "issue-ref", "--", text }, function(res: { ref: IssueRef? }, cx)
+		cb(res.ref, cx)
+	end)
+end
+
+local function issue_branch(cx: WindowCx, root: string, issue: string, branch: string, typedName: string?)
+	prompt_text(
+		cx,
+		{ value = typedName or branch, placeholder = "Branch for " .. issue, icon = "branch", action = "create" },
+		function(text, cx2, err)
+			if err ~= nil or text == nil or text == "" then
+				return
+			end
+			local extra = { "--issue", issue }
+			if text ~= branch then
+				table.insert(extra, "--branch=" .. text)
+			end
+			create(cx2, root, extra, text, "new", function(cx3)
+				issue_branch(cx3, root, issue, branch, text)
+			end)
+		end
+	)
+end
+
+local function suggest_issue(cx: WindowCx, root: string?, issue: string, ref: IssueRef?)
+	resolve_sessions(cx, function(cx2)
+		local selected = root
+		local nameWithOwner = if ref ~= nil then ref.repo else nil
+		if nameWithOwner ~= nil then
+			local matching: string? = nil
+			for _, repo in ipairs(localRepos) do
+				if repo.origin == nameWithOwner then
+					matching = matching or repo.root
+					if repo.root == root then
+						matching = root
+						break
+					end
+				end
+			end
+			selected = matching or root
+		end
+		local function not_cloned(cx3: WindowCx, err: CliError)
+			if err.code ~= "not_cloned" or nameWithOwner == nil then
+				toast_error(cx3, err)
+				return
+			end
+			choose(cx3, {
+				placeholder = "Repository is not cloned",
+				items = {
+					{
+						id = "clone",
+						label = "Clone " .. nameWithOwner,
+						detail = short_path(tostring(err.path)),
+						icon = "globe",
+					},
+				},
+			}, function(id, cx4)
+				if id == "clone" then
+					cli_or_toast({ "clone", nameWithOwner }, function(clone: RootResult, cx5)
+						suggest_issue(cx5, clone.root, issue, ref)
+					end)
+				end
+			end)
+		end
+		if ref ~= nil and ref.kind == "pr" then
+			create(cx2, selected, { "--issue", issue }, issue, "new", nil, not_cloned)
+			return
+		end
+		local argv = { "create", "--issue", issue, "--no-tab", "--suggest" }
+		if selected ~= nil then
+			table.insert(argv, "--repo")
+			table.insert(argv, selected)
+		end
+		cli(argv, function(res: any, err, cx3)
+			if err ~= nil then
+				not_cloned(cx3, err)
+				return
+			end
+			issue_branch(cx3, res.repo, issue, res.branch)
+		end)
+	end)
+end
+
+local function from_issue(cx: WindowCx, root: string?)
+	tern.process.run({ "pbpaste" }, { timeout_ms = 2000 }, function(res: ProcessResult, cx2: WindowCx?)
+		if cx2 == nil then
+			return
+		end
+		local text = (string.gsub(res.stdout, "^%s*(.-)%s*$", "%1"))
+		issue_ref(if res.status == 0 then text else "", function(ref, cx3)
+			local value = if ref ~= nil and ref.repo ~= nil and ref.kind == "issue" then text else nil
+			prompt_text(
+				cx3,
+				{ value = value, placeholder = "GitHub issue URL or #number", icon = "branch", action = "continue" },
+				function(issue, cx4, err)
+					if err == nil and issue ~= nil and issue ~= "" then
+						issue_ref(issue, function(parsed, cx5)
+							suggest_issue(cx5, root, issue, parsed)
+						end)
+					end
+				end
+			)
+		end)
+	end)
+end
+
 local function new_branch(cx: WindowCx, root: string, repoName: string, defaultBranch: string, typedName: string?)
 	prompt_text(cx, {
 		value = typedName,
@@ -1206,17 +1324,23 @@ local function new_branch(cx: WindowCx, root: string, repoName: string, defaultB
 		if err ~= nil or text == nil or text == "" then
 			return
 		end
-		create(cx2, root, { "--branch=" .. text, "--new" }, text, "new", function(cx3)
-			new_branch(cx3, root, repoName, defaultBranch, text)
+		issue_ref(text, function(ref, cx3)
+			if ref ~= nil and ref.repo ~= nil then
+				suggest_issue(cx3, root, text, ref)
+				return
+			end
+			create(cx3, root, { "--branch=" .. text, "--new" }, text, "new", function(cx4)
+				new_branch(cx4, root, repoName, defaultBranch, text)
+			end)
 		end)
 	end)
 end
 
--- The items of the branch picker: `New branch…` from `defaultBranch`, `Other repo…`, then one item for each of
--- `targets`.
+-- The branch picker offers new branches, issues, other repositories, then existing targets.
 local function branch_picker_items(defaultBranch: string, targets: { BranchTarget }): { PickItem }
 	local items: { PickItem } = {
 		{ id = "new", label = "New branch…", detail = "from " .. defaultBranch, icon = "plus" },
+		{ id = "from-issue", label = "From issue…", icon = "branch" },
 		{ id = "other", label = "Other repo…", icon = "folder" },
 	}
 	for _, target in ipairs(targets) do
@@ -1263,6 +1387,8 @@ local function show_branch_picker(cx: WindowCx, root: string, res: BranchesResul
 			end
 			if id == "new" then
 				new_branch(cx2, root, repoName, defaultBranch)
+			elseif id == "from-issue" then
+				from_issue(cx2, root)
 			elseif id == "other" then
 				repo_picker(cx2)
 			else
@@ -1804,6 +1930,19 @@ tern.command({
 	run = start,
 })
 
+tern.command({
+	id = "from-issue",
+	title = "New worktree from issue",
+	icon = "branch",
+	run = function(cx: WindowCx)
+		resolve_sessions(cx, function(cx2)
+			local cur = session_index(cx2).current
+			local facts = if cur ~= nil then reposOfSession[cur.id] else nil
+			from_issue(cx2, if facts ~= nil then facts.first else nil)
+		end)
+	end,
+})
+
 -- The worktree segment shows the branch and the number of changed files of the worktree of the focused pane. It
 -- reads only the worktree index.
 tern.chrome.status(function(pane: StatusPaneInfo): { StatusSegment }?
@@ -1979,16 +2118,22 @@ local function reply_to<T>(call: any): CliCb<T>
 end
 
 tern.carly.export("create", {
-	sig = "(repo: string, branch: string, new: boolean?) -> {branch: string, carried: {string}, owner: string, path: string, repo: string, setup: {line: string, typed: boolean}?, status: string, warnings: {string}}",
-	doc = "Create or reuse a worktree for branch in repo (a dir inside the repo) and open it as a tab. When the main checkout holds branch, it opens the main checkout where it is, with owner main. For a new worktree, setup is the line of setup commands of its repository: the reply comes once the tab's shell prompt shows and the line is typed (typed true), or once that is given up after at most 30 s (typed false, with a setup not run warning).",
+	sig = "(repo: string, branch: string?, new: boolean?, issue: string?) -> {branch: string, carried: {string}, owner: string, path: string, repo: string, issue: {number: number, url: string, title: string}?, setup: {line: string, typed: boolean}?, status: string, warnings: {string}}",
+	doc = "Create or reuse a worktree and open its tab. For work tied to an issue, pass its URL as issue instead of inventing a branch; branch optionally overrides the derived name. Without an issue, branch is required and new creates it. The reply includes issue metadata and setup once its commands are typed or given up after at most 30 s.",
 }, function(...: any): ...any
 	local args, _cx, call = export_args(...)
-	local repo, branch, isNew = args[1], args[2], args[3]
-	if type(repo) ~= "string" or type(branch) ~= "string" then
-		error("create: repo and branch must be strings", 0)
+	local repo, branch, isNew, issue = args[1], args[2], args[3], args[4]
+	if type(repo) ~= "string" or (type(branch) ~= "string" and type(issue) ~= "string") then
+		error("create: repo and either branch or issue must be strings", 0)
 	end
-	local argv = { "create", "--repo", repo, "--no-tab", "--branch=" .. branch }
-	if isNew == true then
+	local argv = { "create", "--repo", repo, "--no-tab" }
+	if type(branch) == "string" then
+		table.insert(argv, "--branch=" .. branch)
+	end
+	if type(issue) == "string" then
+		table.insert(argv, "--issue")
+		table.insert(argv, issue)
+	elseif isNew == true then
 		table.insert(argv, "--new")
 	end
 	cli_or_else(argv, function(_cx, err)

@@ -108,6 +108,7 @@ local ENTRIES: { { what: string, run: (plugin: Stub.Harness, cx: any) -> () } } 
 			local picker = plugin:open_branch_picker(cx, BRANCHES)
 			picker.next(Stub.item(picker, "new"), nil, cx)
 			cx.asked[#cx.asked].next("x", nil, cx)
+			plugin:answer("issue-ref", '{"ref":null}', 0, cx)
 		end,
 	},
 	{

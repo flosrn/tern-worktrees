@@ -91,7 +91,21 @@ Escape gives nil. Enter on an empty prompt gives `""`, and the plugin reads it a
 
 `New branch…` opens a prompt for the name. `cx:prompt` checks nothing while the user types, so the CLI checks the name on Enter. When `create` refuses the name with `bad_args`, a toast tells why, and the prompt opens again with the typed name.
 
+`From issue…` in the branch picker and `New worktree from issue` in the palette (`plugin.tern-worktrees.from-issue`) open an issue prompt. The clipboard is read with `pbpaste` through `tern.process.run`, and pre-fills that prompt only when it holds an issue URL. The picker filter cannot intercept pasted URLs, so the issue entry point is a prompt. `New branch…` also detects an issue URL on Enter and uses the same flow. The plugin first calls `create --issue --suggest`, then opens a second prompt with the derived branch name before creating the worktree. A pull request URL uses the pull request flow.
+
+For a different repository, the plugin uses the open repository session with a matching origin, otherwise offers `Clone <owner>/<repo>` through the clone flow. The CLI uses a matching `--repo` checkout or `<cloneRoot>/<owner>/<repo>` and does not clone silently. Its `not_cloned` error carries the clone `path` and the name with owner in `repo`.
+
 The native picker has no keys of its own for an item. Thus Tear down has no `⌫` key and Force delete has no `⌘⌫` key: the user selects the item and presses Enter. In the pickers that open when a worktree tab closes, Keep worktree is the first item, so Enter keeps the worktree. The custom dialog of a closed tab opened without the focus, but the native picker gets the focus. Thus a key that the user types for a pane goes to the picker, and a typed letter can hide Keep worktree.
+
+### Issue branches
+
+`create --issue <url>` reads the issue number, title, labels, type and state from GitHub. Short references (`#n` or `n`) need `--repo`. `--suggest` returns `branch`, `issue`, `repo` and `warnings` without fetching or writing. `--branch` overrides the derived name. Creation starts from `origin/<default>` and reuses a local or origin branch that matches `^(fix|feat)/<n>(?:-|$)` with its worktree. This also applies to a name with no slug. Closed issues add a warning. A `/pull/<n>` URL uses the PR flow directly and returns no issue metadata. Use it without `--suggest`.
+
+The name is `<prefix>/<number>-<slug>`. `Bug` issue types and labels in `issueBranch.fixLabels` select `fix`. Other issues select `feat`. Label matches ignore uppercase and lowercase letters. The slug removes a leading tag and issue-number references, normalizes accents with NFKD, changes letters to lowercase, drops quotes, maps separators to `-`, and drops French and English stop words. It keeps five words at most and caps the slug at 40 characters on a word boundary. An empty slug gives `<prefix>/<number>`. Unrelated collisions add `-2`, `-3` and so on. The folder name still replaces `/` with `-`.
+
+The result adds `issue: {number, url, title}` and git records `branch.<branch>.ternIssue` with the issue URL. This is a local association, not a GitHub write. The options file defaults `issueBranch.fixLabels` to `["bug", "fix", "regression", "hotfix"]` and `issueBranch.linkOnGitHub` to `false`. Only `linkOnGitHub: true` opts into `gh issue develop <n> --repo <owner>/<repo> --name <branch>`, which creates a remote branch linked in the issue's Development panel. It creates a branch, not a link for a branch from an earlier push. GitHub failures, for example conflicting branches, give `gh_failed`.
+
+Agents use `create --issue <url>` when the work has an issue. This also applies to the Carly `create` export's `issue` argument. Branch-only creation is for work without an issue. The PR body closes the issue with `Closes <owner>/<repo>#<n>`, or `Closes #<n>` in the same repository.
 
 ### Pickers and sessions
 

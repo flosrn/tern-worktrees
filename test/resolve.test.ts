@@ -18,13 +18,19 @@ describe('resolve command', () => {
       const plain = tempDir('plain');
       await expect(run([repo.dir, worktree, plain, local.dir, repo.dir])).resolves.toStrictEqual({
         repos: [
-          { dir: repo.dir, name: 'aoyama', owner: 'virtusize', root: repo.dir },
-          { dir: worktree, name: 'aoyama', owner: 'virtusize', root: repo.dir },
-          { dir: plain, name: null, owner: null, root: null },
-          { dir: local.dir, name: 'local', owner: null, root: local.dir },
-          { dir: repo.dir, name: 'aoyama', owner: 'virtusize', root: repo.dir },
+          { dir: repo.dir, name: 'aoyama', origin: 'virtusize/aoyama', owner: 'virtusize', root: repo.dir },
+          { dir: worktree, name: 'aoyama', origin: 'virtusize/aoyama', owner: 'virtusize', root: repo.dir },
+          { dir: plain, name: null, origin: null, owner: null, root: null },
+          { dir: local.dir, name: 'local', origin: null, owner: null, root: local.dir },
+          { dir: repo.dir, name: 'aoyama', origin: 'virtusize/aoyama', owner: 'virtusize', root: repo.dir },
         ],
       });
+    });
+
+    it('returns a lowercase origin identity without changing the displayed owner', async () => {
+      const repo = await tmpRepo('app');
+      await git(repo.dir, 'remote', 'set-url', 'origin', 'https://github.com/Acme/App.git');
+      await expect(run([repo.dir])).resolves.toMatchObject({ repos: [{ origin: 'acme/app', owner: 'Acme' }] });
     });
 
     it('answers resolve through the CLI main function with the contract fixture', async () => {

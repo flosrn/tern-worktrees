@@ -17,6 +17,7 @@ export interface Config {
   teardown: Teardown;
   cloneRoot: string;
   hotkeys: { new: string[] };
+  issueBranch: { fixLabels: string[]; linkOnGitHub: boolean };
   setup: SetupCommands;
 }
 
@@ -24,6 +25,7 @@ export interface Config {
 export const TEARDOWNS: readonly Teardown[] = ['worktree', 'worktree+merged-branch', 'worktree+branch'];
 
 const DEFAULT_NEW_TAB_HOTKEYS: readonly string[] = ['cmd+shift+w'];
+const DEFAULT_FIX_LABELS: readonly string[] = ['bug', 'fix', 'regression', 'hotfix'];
 
 const EXPECTED_OBJECT = 'expected an object';
 
@@ -33,11 +35,17 @@ interface RawOptions {
   teardown?: unknown;
   cloneRoot?: unknown;
   hotkeys?: unknown;
+  issueBranch?: unknown;
   setup?: unknown;
 }
 
 interface RawHotkeys {
   new?: unknown;
+}
+
+interface RawIssueBranch {
+  fixLabels?: unknown;
+  linkOnGitHub?: unknown;
 }
 
 const isStringList = (value: unknown): value is string[] => Array.isArray(value) && value.every(isString);
@@ -82,6 +90,26 @@ const readNewTabHotkeys = (raw: RawOptions, fail: Fail): string[] => {
     return [...DEFAULT_NEW_TAB_HOTKEYS];
   }
   return isStringList(hotkeys.new) ? hotkeys.new : fail('hotkeys.new', 'expected an array of strings');
+};
+
+const readIssueBranch = (raw: RawOptions, fail: Fail): Config['issueBranch'] => {
+  if (!('issueBranch' in raw)) {
+    return { fixLabels: [...DEFAULT_FIX_LABELS], linkOnGitHub: false };
+  }
+  if (!isJsonObject(raw.issueBranch)) {
+    return fail('issueBranch', EXPECTED_OBJECT);
+  }
+  rejectUnknownKeys(Object.keys(raw.issueBranch), ['fixLabels', 'linkOnGitHub'], 'issueBranch.', fail);
+  const issueBranch: RawIssueBranch = raw.issueBranch;
+  const fixLabels = 'fixLabels' in issueBranch ? issueBranch.fixLabels : [...DEFAULT_FIX_LABELS];
+  if (!isStringList(fixLabels)) {
+    return fail('issueBranch.fixLabels', 'expected an array of strings');
+  }
+  const linkOnGitHub = 'linkOnGitHub' in issueBranch ? issueBranch.linkOnGitHub : false;
+  if (linkOnGitHub !== true && linkOnGitHub !== false) {
+    return fail('issueBranch.linkOnGitHub', 'expected a boolean');
+  }
+  return { fixLabels, linkOnGitHub };
 };
 
 const readSetup = (raw: RawOptions, fail: Fail): SetupCommands => {
@@ -132,10 +160,11 @@ export const loadConfig = (): Config => {
     throw new CliError('config_invalid', `${file}: ${key}: ${reason}`);
   };
   const raw = existsSync(file) ? decode(file, fail) : {};
-  rejectUnknownKeys(Object.keys(raw), ['teardown', 'cloneRoot', 'hotkeys', 'setup'], '', fail);
+  rejectUnknownKeys(Object.keys(raw), ['teardown', 'cloneRoot', 'hotkeys', 'issueBranch', 'setup'], '', fail);
   return {
     cloneRoot: readCloneRoot(raw, fail),
     hotkeys: { new: readNewTabHotkeys(raw, fail) },
+    issueBranch: readIssueBranch(raw, fail),
     setup: readSetup(raw, fail),
     teardown: readTeardown(raw, fail),
   };

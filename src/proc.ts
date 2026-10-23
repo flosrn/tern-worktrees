@@ -7,6 +7,7 @@ export type ErrorCode =
   | 'bad_args'
   | 'config_invalid'
   | 'not_a_repo'
+  | 'not_cloned'
   | 'not_managed'
   | 'path_conflict'
   | 'worktree_exists_elsewhere'
