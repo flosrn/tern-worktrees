@@ -420,6 +420,38 @@ for _, case in
 			end,
 			argv = Stub.argv("remove-force", { worktree = WORKTREE }),
 		},
+		{
+			what = "remove export with closeBusyTabs true approves closing busy tabs separately",
+			verb = "remove",
+			run = function(plugin: Stub.Harness, cx: any)
+				plugin.exports.remove(WORKTREE, nil, true, cx, Stub.call())
+			end,
+			argv = Stub.argv("remove-close-busy-tabs", { worktree = WORKTREE }),
+		},
+		{
+			what = "remove export with closeBusyTabs false does not approve closing busy tabs",
+			verb = "remove",
+			run = function(plugin: Stub.Harness, cx: any)
+				plugin.exports.remove(WORKTREE, nil, false, cx, Stub.call())
+			end,
+			argv = Stub.argv("remove", { worktree = WORKTREE }),
+		},
+		{
+			what = "remove export with a truthy non-boolean does not approve closing busy tabs",
+			verb = "remove",
+			run = function(plugin: Stub.Harness, cx: any)
+				plugin.exports.remove(WORKTREE, nil, "true", cx, Stub.call())
+			end,
+			argv = Stub.argv("remove", { worktree = WORKTREE }),
+		},
+		{
+			what = "remove export can approve force and closing busy tabs independently",
+			verb = "remove",
+			run = function(plugin: Stub.Harness, cx: any)
+				plugin.exports.remove(WORKTREE, true, true, cx, Stub.call())
+			end,
+			argv = Stub.argv("remove-force-close-busy-tabs", { worktree = WORKTREE }),
+		},
 	}
 do
 	test(`the Carly {case.what}`, function()

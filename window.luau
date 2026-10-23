@@ -2012,17 +2012,20 @@ tern.carly.export("list", {
 end)
 
 tern.carly.export("remove", {
-	sig = "(path: string, force: boolean?) -> {removed: string}",
-	doc = "Tear down the managed worktree at path under the teardown policy, and close its tabs. Force discards uncommitted work.",
+	sig = "(path: string, force: boolean?, closeBusyTabs: boolean?) -> {removed: string}",
+	doc = "Tear down the managed worktree at path under the teardown policy, and close its tabs. Busy tabs refuse teardown with busy_tabs unless closeBusyTabs is true. Approve closing busy tabs separately from force, which discards work to lose.",
 }, function(...: any): ...any
 	local args, _cx, call = export_args(...)
-	local path, force = args[1], args[2]
+	local path, force, closeBusyTabs = args[1], args[2], args[3]
 	if type(path) ~= "string" then
 		error("remove: path must be a string", 0)
 	end
 	local argv = { "remove", path }
 	if force == true then
 		table.insert(argv, "--force")
+	end
+	if closeBusyTabs == true then
+		table.insert(argv, "--close-busy-tabs")
 	end
 	cli(argv, function(res: RemoveResult, err, cx2)
 		if err == nil then

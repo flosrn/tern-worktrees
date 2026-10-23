@@ -7,8 +7,10 @@ import { currentBranch, fetchOrigin, gitMust, gitRun, isAncestor, requireCheckou
 import { defaultBranch, listPullRequests, readOrigin } from '../github.ts';
 import { isUnder, worktreeOwner, worktreeRoot } from '../paths.ts';
 import { CliError } from '../proc.ts';
+import type { BusyBlock } from '../proc.ts';
 import type { GithubRepoRef } from '../repo-ref.ts';
-import { blocksUnder, close, ls } from '../tern.ts';
+import { blocksUnder, close, ls, processOf } from '../tern.ts';
+import type { PlacedBlock } from '../tern.ts';
 import { guardWorkToLose } from '../work-to-lose.ts';
 
 /** Why `remove` kept the branch: the teardown policy `worktree`, a branch that is not merged (also when the merge check failed), or a failed `git branch -D`. */
@@ -28,6 +30,7 @@ export interface RemoveResult {
 interface Options {
   'force': boolean;
   'keep-tab': boolean;
+  'close-busy-tabs': boolean;
   'target': string;
 }
 
@@ -41,7 +44,7 @@ const parse = (args: string[]): Options => {
   const parsed = parseArgs({
     allowPositionals: true,
     args,
-    options: { 'force': { default: false, type: 'boolean' }, 'keep-tab': { default: false, type: 'boolean' } },
+    options: { 'close-busy-tabs': { default: false, type: 'boolean' }, 'force': { default: false, type: 'boolean' }, 'keep-tab': { default: false, type: 'boolean' } },
   });
   const [target, ...rest] = parsed.positionals;
   if (target === undefined || rest.length > 0) {
@@ -96,6 +99,34 @@ const closeBlocks = async (ctx: Context, blocks: number[]): Promise<number[]> =>
   return closed.filter(block => block !== null);
 };
 
+const IDLE_SHELLS = new Set(['sh', 'bash', 'zsh', 'fish', 'dash', 'ksh', 'tcsh', 'csh', 'nu', 'pwsh', 'powershell', 'cmd.exe']);
+
+const guardBusyTabs = async (blocks: PlacedBlock[]): Promise<void> => {
+  const snapshots = await Promise.all(blocks.map(async entry => ({ ...entry, snapshot: await processOf(entry.block.id) })));
+  const busy: BusyBlock[] = [];
+  const descriptions = [];
+  for (const {
+    block,
+    tab,
+    session,
+    snapshot: { child, foreground },
+  } of snapshots) {
+    if (foreground === null) {
+      continue;
+    }
+    const idleShell = child?.pid === foreground.pid && IDLE_SHELLS.has(child.name);
+    if (!idleShell) {
+      busy.push({ block: block.id, process: foreground, session: session.id, tab: tab.id });
+      descriptions.push(`${block.id} in tab ${JSON.stringify(tab.name)} (${foreground.argv.join(' ') || foreground.name})`);
+    }
+  }
+  if (busy.length > 0) {
+    throw new CliError('busy_tabs', `Foreground processes in blocks: ${descriptions.join(', ')}; use --close-busy-tabs to close them after the user agrees`, {
+      blocks: busy,
+    });
+  }
+};
+
 const hasMergedPullRequest = async (ctx: Context, repoRef: GithubRepoRef | null, branch: string): Promise<boolean> => {
   if (repoRef === null) {
     return false;
@@ -136,7 +167,7 @@ const applyPolicy = async (ctx: Context, teardown: Teardown, branch: string): Pr
 };
 
 /**
- * `remove <path> [--force] [--keep-tab]`: removes a tern-managed worktree, closes the Tern blocks in the worktree,
+ * `remove <path> [--force] [--keep-tab] [--close-busy-tabs]`: removes a tern-managed worktree, closes the Tern blocks in the worktree,
  * then deletes its branch if the teardown policy tells it to. Ignored files that are hard to rebuild stop it like uncommitted changes do.
  * A copy with the bytes of the same file in the main checkout does not stop it. `--force` discards the two. It refuses omp-owned worktrees.
  */
@@ -160,9 +191,13 @@ export const run = async (args: string[]): Promise<RemoveResult> => {
   }
   const branch = await currentBranch(target);
   const ctx: Context = { root: main, target, warnings: [] };
-  const blocks = options['keep-tab'] ? [] : await warnOnCliError(ctx, 'tabs not closed', [], async () => blocksUnder(await ls(), target).map(entry => entry.block.id));
+  const blocks = options['keep-tab'] ? [] : await warnOnCliError(ctx, 'tabs not closed', [], async () => blocksUnder(await ls(), target));
+  await guardBusyTabs(options['close-busy-tabs'] ? [] : blocks);
   await removeWorktree(ctx, options.force);
-  const closedBlocks = await closeBlocks(ctx, blocks);
+  const closedBlocks = await closeBlocks(
+    ctx,
+    blocks.map(entry => entry.block.id),
+  );
   const branchKept = branch === null ? null : await applyPolicy(ctx, teardown, branch);
   return { branch, branchDeleted: branch !== null && branchKept === null, branchKept, closedBlocks, removed: target, repo: main, warnings: ctx.warnings };
 };

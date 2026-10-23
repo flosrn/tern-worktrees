@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { repoRoot } from './git.ts';
+import { isJsonObject, isString } from './json.ts';
 import { envVar, isUnder } from './paths.ts';
 import { CliError, must, run } from './proc.ts';
 
@@ -52,6 +53,91 @@ const tern = async (args: string[]): Promise<string> => await must([ternBin(), .
 export const ls = async (): Promise<TernListing> =>
   // SAFETY: `tern ls --json` prints the TernListing layout.
   JSON.parse(await tern(['ls'])) as TernListing;
+
+/** A process reported by `tern process --json`. */
+export interface TernProcess {
+  pid: number;
+  name: string;
+  argv: string[];
+  cwd: string | null;
+}
+
+/** The terminal child and its foreground process group, sampled by the daemon. */
+export interface TernProcessSnapshot {
+  child: TernProcess | null;
+  foreground: TernProcess | null;
+  pane: number;
+  group: number | null;
+}
+
+// oxlint-disable-next-line anti-slop/no-runtime-typeof -- Validate numbers at the external Tern JSON boundary.
+const isNumber = (value: unknown): value is number => typeof value === 'number';
+
+interface RawProcess {
+  argv?: unknown;
+  cwd?: unknown;
+  name?: unknown;
+  pid?: unknown;
+}
+
+interface RawProcessSnapshot {
+  child?: unknown;
+  foreground?: unknown;
+  group?: unknown;
+  pane?: unknown;
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- External Tern JSON must be validated before its shape is trusted.
+const parseProcess = (value: unknown): TernProcess | null => {
+  if (value === null) {
+    return null;
+  }
+  if (!isJsonObject(value)) {
+    throw new Error('Tern process must be an object');
+  }
+  // SAFETY: the object can omit fields. The code validates each value before use.
+  const raw = value as RawProcess;
+  if (
+    // oxlint-disable-next-line sonarjs/expression-complexity -- Keep the complete process boundary contract together before narrowing its fields.
+    !isNumber(raw.pid) ||
+    !isString(raw.name) ||
+    !Array.isArray(raw.argv) ||
+    !raw.argv.every(isString) ||
+    !(raw.cwd === null || isString(raw.cwd))
+  ) {
+    throw new Error('Invalid Tern process');
+  }
+  return { argv: raw.argv, cwd: raw.cwd, name: raw.name, pid: raw.pid };
+};
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- External Tern JSON must be validated before its shape is trusted.
+const parseProcessSnapshot = (value: unknown): TernProcessSnapshot => {
+  if (!isJsonObject(value)) {
+    throw new Error('Tern process snapshot must be an object');
+  }
+  // SAFETY: the object can omit fields. The code validates each value before use.
+  const raw = value as RawProcessSnapshot;
+  if (
+    // oxlint-disable-next-line sonarjs/expression-complexity -- Validate every snapshot field before parsing its nullable processes.
+    !isNumber(raw.pane) ||
+    !(raw.group === null || isNumber(raw.group)) ||
+    !('child' in raw) ||
+    !('foreground' in raw)
+  ) {
+    throw new Error('Invalid Tern process snapshot');
+  }
+  return { child: parseProcess(raw.child), foreground: parseProcess(raw.foreground), group: raw.group, pane: raw.pane };
+};
+
+/** Samples a block's foreground process without sending input to it. */
+export const processOf = async (block: number): Promise<TernProcessSnapshot> => {
+  try {
+    const output = await tern(['process', String(block)]);
+    return parseProcessSnapshot(JSON.parse(output));
+  } catch (error) {
+    throw new CliError('tern_failed', `Cannot inspect block ${block}: ${String(error)}`);
+  }
+};
 
 const newBlock = async (args: string[]): Promise<number> => {
   // SAFETY: `tern new --json` prints the id of the new block in the `block` field.

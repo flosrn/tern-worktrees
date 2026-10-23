@@ -7,6 +7,7 @@
 - Treat ignored Python tool caches, virtual environments and TypeScript build info as output that tools make again. Before, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `__pycache__`, `.venv` and `*.tsbuildinfo` stopped worktree removal without `--force`, and Relocate copied them into the worktree it made again
 - Open the branch picker for the repository of the pane with the focus. This applies to the hotkey and the worktree segment. Before, the picker opened for the first repository of the session, so `New branch…` could make a worktree in the incorrect repository
 - Let a clean worktree go when its submodule release history is recorded in the main checkout. Before, a detached submodule at a release tag not held by remote branches gave `dirty_worktree`. The check stays local and still stops on a submodule commit recorded only in the worktree
+- Refuse `tern-wt remove` with `busy_tabs` before removing a worktree whose blocks run foreground processes. Use `--close-busy-tabs` to close them after the user agrees. Before, `--force` could stop an agent session without a warning
 
 ## [0.3.2](https://github.com/riicodespretty/tern-worktrees/releases/tag/0.3.2 "2026-10-14")
 

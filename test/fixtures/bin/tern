@@ -11,6 +11,12 @@ case "$verb" in
 ls)
 	exec cat "$FAKE_TERN_DIR/ls.json"
 	;;
+process)
+	if [ -f "$FAKE_TERN_DIR/process-$2.json" ]; then
+		exec cat "$FAKE_TERN_DIR/process-$2.json"
+	fi
+	printf '{"pane":%s,"child":{"pid":61321,"name":"zsh","argv":["/bin/zsh","-l"],"cwd":"/tmp"},"group":61321,"foreground":{"pid":61321,"name":"zsh","argv":["/bin/zsh","-l"],"cwd":"/tmp"}}\n' "$2"
+	;;
 new)
 	echo '{"block":42}'
 	;;

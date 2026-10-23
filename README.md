@@ -98,6 +98,8 @@ When you close a worktree tab, a picker opens with the placeholder `Closing work
 
 Escape keeps the tab and the worktree. The picker has no `⌫` or `⌘⌫` keys. To select an item, type to filter the list or use the arrow keys. Then press Enter. When the picker fails to open, a toast shows the error. The tab closes, and the worktree stays.
 
+The plugin's teardown picker calls `remove --keep-tab`, then closes the tab. It does not examine running processes, so the `busy_tabs` refusal does not protect this picker. Check the tab's processes before you select Tear down or Force delete.
+
 While a teardown runs, a `Deleting worktree <branch>…` toast shows. After the teardown, the toast title tells you what the teardown did with the branch: `Deleted worktree and branch`, `Deleted worktree, kept branch: not merged`, or `Deleted worktree, kept branch`. Its second line names the steps that failed, for example `fetch failed`.
 
 When the tab closes before the picker opens, for example from the tab bar, the picker reads `Worktree tab closed · <path>` and offers the same two items. Escape keeps the worktree. This picker gets the focus, so a key press meant for a pane goes to the picker. A typed letter can hide Keep worktree, so check the selected item before you press Enter.
@@ -195,7 +197,7 @@ A Tern key preset or a different plugin can bind the chord first. When `cmd+shif
 [`skills/tern-worktrees/SKILL.md`](skills/tern-worktrees/SKILL.md) is the reference for each command: its arguments, its output fields, the next step for each error code, and the rules agents follow for teardown. The commands:
 
 - `create`: makes or reuses the tern-managed worktree of a branch or a pull request, or reuses its omp-owned worktree or the main checkout, and opens its tab. Its `owner` field is `tern`, `omp` or `main`. For a new worktree, its `setup` field holds the setup commands. `create` types them into the tab that it opened.
-- `remove`: tears down a tern-managed worktree as the teardown policy says, and closes its tabs.
+- `remove`: tears down a tern-managed worktree as the teardown policy says, and closes its tabs. Before removal it checks the target blocks for running processes. See the refusal and overrides below.
 - `list`: lists the tern-managed worktrees, each with its `owner` and its number of `changed` files. `--all` adds the omp-owned worktrees. When git cannot count the changes of a worktree, for example because a submodule has a broken `.git` file, `list` still shows that worktree and adds a warning.
 - `branches`: lists the branches, the open pull requests and the worktrees of a repository, with the owner of each worktree and `main` true for the main checkout. `--offline` reads only local refs, with no fetch and no pull requests.
 - `resolve`: gives the repository root, name and owner of each directory.
@@ -205,9 +207,17 @@ A Tern key preset or a different plugin can bind the chord first. When `cmd+shif
 - `config`: prints the options file with each default filled in.
 - `setup`: links `~/.local/bin/tern-wt` and the skill to the package that it runs from. The plugin runs it each time it loads in a Tern window.
 
-Each command prints one JSON object. On failure it exits 1 with one of these error codes: `bad_args`, `config_invalid`, `not_a_repo`, `not_managed`, `path_conflict`, `worktree_exists_elsewhere`, `dirty_worktree`, `git_failed`, `gh_failed`, `omp_failed`, `tern_failed`.
+Each command prints one JSON object. On failure it exits 1 with one of these error codes: `bad_args`, `config_invalid`, `not_a_repo`, `not_managed`, `path_conflict`, `worktree_exists_elsewhere`, `dirty_worktree`, `busy_tabs`, `git_failed`, `gh_failed`, `omp_failed`, `tern_failed`.
 
 The plugin also gives Carly the exports `create`, `list` and `remove`, which run the CLI commands of the same names. For a new worktree with setup commands, the `create` export replies when the plugin typed them into the tab or gave up, at most 30 s after the tab opened, so `setup.typed` and `warnings` mean what they mean in the CLI output.
+
+### Remove a worktree safely
+
+`tern-wt remove <path> [--force] [--close-busy-tabs] [--keep-tab]`
+
+By default, `remove` refuses busy blocks with `busy_tabs` before removal. `--close-busy-tabs` skips the process check with approval to close busy blocks, `--force` only discards work to lose, and `--keep-tab` skips all Tern inspection and keeps tabs open. Read the [remove rules](skills/tern-worktrees/SKILL.md#remove) for the idle-process rule, `error.blocks`, inspection failures and the limits of this snapshot check.
+
+The Carly `remove(path, force?, closeBusyTabs?)` export uses the process check by default. Set the third argument, `closeBusyTabs`, to `true` only with approval to close busy blocks. It passes `--close-busy-tabs` and skips process inspection. The second argument, `force`, passes `--force` and only discards work to lose.
 
 ## Design and glossary
 

@@ -125,7 +125,12 @@ describe('remove command', () => {
       await expect(cliJson(['remove', dir])).resolves.toStrictEqual(contract('remove-deleted', { repo: repo.dir, worktree: dir }));
       expect(existsSync(dir)).toBeFalsy();
       await expect(hasBranch('feature/x')).resolves.toBeFalsy();
-      expect(ternLog().toSorted()).toStrictEqual(['close 2 --json', 'close 3 --json', 'ls --json']);
+      const calls = ternLog();
+      expect({ closed: calls.slice(3).toSorted(), listing: calls[0], processes: calls.slice(1, 3).toSorted() }).toStrictEqual({
+        closed: ['close 2 --json', 'close 3 --json'],
+        listing: 'ls --json',
+        processes: ['process 2 --json', 'process 3 --json'],
+      });
     });
 
     it('keeps an unmerged branch', async () => {
@@ -278,7 +283,7 @@ describe('remove command', () => {
       });
       await expect(run([dir, '--keep-tab'])).rejects.toMatchObject({ code: 'dirty_worktree', extra: { files: ['?? .setup-ran'] } });
       expect(existsSync(path.join(dir, '.setup-ran'))).toBeTruthy();
-      expect(ternLog()).toStrictEqual(['ls --json']);
+      expect(ternLog()).toStrictEqual(['ls --json', 'process 1 --json']);
     });
 
     it('keeps an untracked file that status.showUntrackedFiles hides', async () => {
@@ -374,7 +379,7 @@ describe('remove command', () => {
       writeFileSync(path.join(dir, 'junk.txt'), 'x\n');
       await expect(cliJson(['remove', dir])).resolves.toStrictEqual(contract('remove-dirty', { worktree: dir }));
       expect(readFileSync(path.join(dir, '.env'), 'utf-8')).toBe('SECRET=1\n');
-      expect(ternLog()).toStrictEqual(['ls --json', 'ls --json']);
+      expect(ternLog()).toStrictEqual(['ls --json', 'process 1 --json', 'ls --json', 'process 1 --json']);
     });
 
     it('removes, without --force, ignored files that are easy to rebuild', async () => {
