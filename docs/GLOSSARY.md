@@ -55,7 +55,7 @@ An ignored file that no build, install or tool run makes again, for example a `.
 _Avoid_: Secret file, precious file
 
 **Work to lose**:
-The changes, the new files that git does not track, the submodule commits that no remote holds, and the hard-to-rebuild files that a delete of a worktree destroys.
+The changes, the new files that git does not track, the submodule commits not held by a remote branch or by the main checkout's committed submodule history, and the hard-to-rebuild files that a delete of a worktree destroys.
 _Avoid_: Dirty files, losses
 
 ### Teardown

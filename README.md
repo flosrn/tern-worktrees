@@ -81,7 +81,9 @@ The branch picker of that repository opens next.
 
 A branch can have a worktree that is not in the worktree root, for example from Orca, or from `tern-wt` before you installed omp, in `~/.tern-wt/worktrees`. When you pick that branch, a picker reads `Worktree of this branch is at <path>` and offers `Relocate to <path>`. Enter relocates, and Escape keeps the worktree where it is. Relocate moves the worktree into the root.
 
-When git refuses the move, `tern-wt` makes the worktree again in the root with plain `git worktree add`, also in omp clone mode. Of the work to lose in the first worktree, only a change, a new file that git does not track or a submodule commit that no remote holds stops the rebuild. Then the worktree stays where it is, and a message lists that work.
+When git refuses the move, `tern-wt` makes the worktree again in the root with plain `git worktree add`, also in omp clone mode. Of the work to lose in the first worktree, only a change, a new file that git does not track or a submodule commit not held by a remote branch or by the main checkout's committed submodule history stops the rebuild. Then the worktree stays where it is, and a message lists that work.
+
+The submodule check is local: it trusts the commits recorded in `HEAD` of the main checkout, and their ancestors, also for nested submodules, only when the two submodule object stores have the recorded commit: the main checkout and the worktree. Otherwise, only remote branches protect the commits. A release tag need not be fetched. A local tag alone does not protect a commit. A submodule commit recorded only in the worktree being removed or relocated does not protect it.
 
 An omp-owned worktree of the branch needs no relocation: `tern-wt` opens its tab where it is.
 

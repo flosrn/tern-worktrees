@@ -309,7 +309,7 @@ const moveOrClear = async (ctx: Context, target: Target, existing: Worktree): Pr
   if (moved.status === 0) {
     return null;
   }
-  const files = await guardWorkToLose(existing.path, 'recreating');
+  const files = await guardWorkToLose(existing.path, 'recreating', ctx.root);
   const carry: Carry = { files, staging: mkdtempSync(path.join(tmpdir(), 'tern-wt-carry-')) };
   await afterStaging(carry, async () => {
     copyAll(existing.path, carry.staging, carry.files);

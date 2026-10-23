@@ -65,8 +65,147 @@ describe('work to lose', () => {
   describe(guardWorkToLose, () => {
     it('resolves no files for either operation in a clean worktree with pushed submodules', async () => {
       const dir = await nestedSubmodules();
-      await expect(guardWorkToLose(dir, 'recreating')).resolves.toStrictEqual([]);
-      await expect(guardWorkToLose(dir, { removing: tempDir('main') })).resolves.toStrictEqual([]);
+      await expect(guardWorkToLose(dir, 'recreating', dir)).resolves.toStrictEqual([]);
+      await expect(guardWorkToLose(dir, { removing: tempDir('main') }, dir)).resolves.toStrictEqual([]);
+    });
+
+    it('retains nested release history recorded in the main checkout without fetched tags', async () => {
+      const dir = await nestedSubmodules();
+      const outer = path.join(dir, 'outer');
+      const inner = path.join(outer, 'inner');
+      await git(inner, 'commit', '--quiet', '--allow-empty', '-m', 'release one');
+      await git(inner, 'tag', 'v1');
+      await git(inner, 'commit', '--quiet', '--allow-empty', '-m', 'release two');
+      await git(inner, 'tag', 'v2');
+      await git(outer, 'commit', '--quiet', '-am', 'pin inner release');
+      await git(dir, 'commit', '--quiet', '-am', 'pin outer release');
+      await git(inner, 'tag', '-d', 'v1', 'v2');
+      await expect(guardWorkToLose(dir, 'recreating', dir)).resolves.toStrictEqual([]);
+      await expect(guardWorkToLose(dir, { removing: dir }, dir)).resolves.toStrictEqual([]);
+    });
+
+    it('uses the recorded outer commit even when the main submodule checkout has advanced', async () => {
+      const dir = await nestedSubmodules();
+      const outer = path.join(dir, 'outer');
+      const inner = path.join(outer, 'inner');
+      const checkout = tempDir('feature');
+      await git(dir, 'worktree', 'add', '--quiet', '--detach', checkout);
+      await git(checkout, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive');
+      await git(inner, 'commit', '--quiet', '--allow-empty', '-m', 'private release');
+      const commit = await git(inner, 'rev-parse', '--short', 'HEAD');
+      await git(outer, 'commit', '--quiet', '-am', 'pin private release');
+      await git(path.join(checkout, 'outer'), 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', outer, 'HEAD');
+      await git(path.join(checkout, 'outer', 'inner'), 'fetch', '--quiet', '--no-tags', inner, 'HEAD');
+      await git(path.join(checkout, 'outer', 'inner'), 'checkout', '--quiet', 'FETCH_HEAD');
+      await git(path.join(checkout, 'outer'), 'commit', '--quiet', '-am', 'pin private inner');
+      await git(checkout, 'commit', '--quiet', '-am', 'pin private outer');
+      const error = await rejection(guardWorkToLose(checkout, 'recreating', dir));
+      expect(error.extra.files).toContain(`outer/inner: unpushed ${commit.trim()}`);
+    });
+  });
+
+  describe('submodule paths', () => {
+    it('checks submodules below ordinary directories', async () => {
+      const dir = await nestedSubmodules();
+      await git(dir, 'mv', 'outer', 'nested-outer');
+      await git(dir, 'commit', '--quiet', '-am', 'move submodule');
+      mkdirSync(path.join(dir, 'vendor'));
+      await git(dir, 'mv', 'nested-outer', 'vendor/outer');
+      await git(path.join(dir, 'vendor', 'outer'), 'commit', '--quiet', '--allow-empty', '-m', 'private release');
+      await git(dir, 'commit', '--quiet', '-am', 'nest submodule');
+      await expect(guardWorkToLose(dir, 'recreating', dir)).resolves.toStrictEqual([]);
+    });
+
+    it('does not trust gitlinks added only in another worktree, including nested submodules', async () => {
+      const dir = await nestedSubmodules();
+      const checkout = tempDir('feature');
+      await git(dir, 'worktree', 'add', '--quiet', '--detach', checkout, 'HEAD');
+      await git(checkout, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive');
+      await git(dir, 'switch', '--quiet', '--detach', 'HEAD~1');
+      const inner = path.join(checkout, 'outer', 'inner');
+      await git(inner, 'commit', '--quiet', '--allow-empty', '-m', 'private nested release');
+      const commit = await git(inner, 'rev-parse', '--short', 'HEAD');
+      await git(path.join(checkout, 'outer'), 'commit', '--quiet', '-am', 'pin nested release');
+      await git(checkout, 'commit', '--quiet', '-am', 'pin outer release');
+      const error = await rejection(guardWorkToLose(checkout, 'recreating', dir));
+      expect(error.code).toBe('dirty_worktree');
+      expect(error.extra.files).toContain(`outer/inner: unpushed ${commit.trim()}`);
+    });
+
+    it('keeps a submodule commit whose only object copy is in the worktree after main merges its gitlink', async () => {
+      const dir = await nestedSubmodules();
+      const checkout = tempDir('feature');
+      await git(dir, 'worktree', 'add', '--quiet', '-b', 'feature', checkout);
+      await git(checkout, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive');
+      const outer = path.join(checkout, 'outer');
+      await git(outer, 'commit', '--quiet', '--allow-empty', '-m', 'private release');
+      const commit = await git(outer, 'rev-parse', '--short', 'HEAD');
+      await git(checkout, 'commit', '--quiet', '-am', 'pin private release');
+      await git(dir, 'merge', '--quiet', 'feature');
+      await expect(guardWorkToLose(checkout, 'recreating', dir)).rejects.toMatchObject({ code: 'dirty_worktree', extra: { files: [`outer: unpushed ${commit.trim()}`] } });
+    });
+
+    it('keeps a nested commit whose object is missing from main even after main checks out the outer gitlink', async () => {
+      const dir = await nestedSubmodules();
+      const checkout = tempDir('feature');
+      await git(dir, 'worktree', 'add', '--quiet', '-b', 'feature', checkout);
+      await git(checkout, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive');
+      const outer = path.join(checkout, 'outer');
+      const inner = path.join(outer, 'inner');
+      writeFileSync(path.join(inner, 'private.txt'), 'worktree-only nested work\n');
+      await git(inner, 'add', 'private.txt');
+      await git(inner, 'commit', '--quiet', '-m', 'private nested work');
+      const commit = await git(inner, 'rev-parse', '--short', 'HEAD');
+      const object = await git(inner, 'rev-parse', 'HEAD');
+      await git(outer, 'commit', '--quiet', '-am', 'pin nested work');
+      await git(checkout, 'commit', '--quiet', '-am', 'pin outer work');
+      await git(dir, 'merge', '--quiet', 'feature');
+      await git(path.join(dir, 'outer'), '-c', 'protocol.file.allow=always', 'fetch', '--quiet', '--no-recurse-submodules', outer, 'HEAD');
+      await git(dir, '-c', 'protocol.file.allow=always', '-c', 'fetch.recurseSubmodules=false', 'submodule', 'update', '--init');
+      await expect(git(path.join(dir, 'outer', 'inner'), 'cat-file', '-e', `${object.trim()}^{commit}`)).rejects.toThrow(/Not a valid object name/u);
+      const error = await rejection(guardWorkToLose(checkout, 'recreating', dir));
+      expect(error.code).toBe('dirty_worktree');
+      expect(error.extra.files).toContain(`outer/inner: unpushed ${commit.trim()}`);
+    });
+
+    it('allows a clean linked worktree with pushed submodules when main has an unborn HEAD', async () => {
+      const dir = await nestedSubmodules();
+      const checkout = tempDir('feature');
+      await git(dir, 'worktree', 'add', '--quiet', '--detach', checkout);
+      await git(checkout, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive');
+      await git(dir, 'symbolic-ref', 'HEAD', 'refs/heads/unborn');
+      await expect(guardWorkToLose(checkout, 'recreating', dir)).resolves.toStrictEqual([]);
+    });
+
+    it('does not use a ref named null when main records no submodule history', async () => {
+      const dir = await nestedSubmodules();
+      const checkout = tempDir('feature');
+      await git(dir, 'worktree', 'add', '--quiet', '--detach', checkout);
+      await git(checkout, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive');
+      const inner = path.join(checkout, 'outer', 'inner');
+      await git(inner, 'commit', '--quiet', '--allow-empty', '-m', 'private inner');
+      const commit = await git(inner, 'rev-parse', '--short', 'HEAD');
+      await git(inner, 'tag', 'null');
+      const outer = path.join(checkout, 'outer');
+      await git(outer, 'commit', '--quiet', '-am', 'pin private inner');
+      await git(outer, 'tag', 'null');
+      await git(checkout, 'commit', '--quiet', '-am', 'pin outer');
+      await git(path.join(dir, 'outer'), 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', outer, 'refs/tags/null:refs/tags/null');
+      await git(path.join(dir, 'outer', 'inner'), 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', inner, 'refs/tags/null:refs/tags/null');
+      await git(dir, 'switch', '--quiet', '--detach', 'HEAD~1');
+      const error = await rejection(guardWorkToLose(checkout, 'recreating', dir));
+      expect(error.extra.files).toContain(`outer/inner: unpushed ${commit.trim()}`);
+    });
+
+    it('allows an older clean worktree when main records submodule objects it has not fetched', async () => {
+      const dir = await nestedSubmodules();
+      const checkout = tempDir('feature');
+      await git(dir, 'worktree', 'add', '--quiet', '--detach', checkout);
+      await git(checkout, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive');
+      await git(path.join(dir, 'outer', 'inner'), 'commit', '--quiet', '--allow-empty', '-m', 'new inner');
+      await git(path.join(dir, 'outer'), 'commit', '--quiet', '-am', 'pin new inner');
+      await git(dir, 'commit', '--quiet', '-am', 'pin new outer');
+      await expect(guardWorkToLose(checkout, 'recreating', dir)).resolves.toStrictEqual([]);
     });
 
     it('stops both operations on unpushed commits and changes at each submodule depth, and stops teardown also on an ignored file', async () => {
@@ -81,10 +220,10 @@ describe('work to lose', () => {
       await ignoreGlobally('secret.env');
       writeFileSync(path.join(outer, 'secret.env'), 'x\n');
       const changes = [' M outer', 'outer: ?? new.txt', `outer/inner: unpushed ${local.trim()}`];
-      const recreating = await rejection(guardWorkToLose(dir, 'recreating'));
+      const recreating = await rejection(guardWorkToLose(dir, 'recreating', dir));
       expect([recreating.code, recreating.message]).toStrictEqual(['dirty_worktree', `${dir} has work that recreating it would lose`]);
       expect(recreating.extra).toStrictEqual({ changes, existing: dir, files: changes, hardToRebuild: [] });
-      const removing = await rejection(guardWorkToLose(dir, { removing: tempDir('main') }));
+      const removing = await rejection(guardWorkToLose(dir, { removing: tempDir('main') }, dir));
       expect([removing.code, removing.message]).toStrictEqual(['dirty_worktree', `${dir} has work that removing it would lose`]);
       expect(removing.extra).toStrictEqual({ changes, existing: dir, files: [...changes, '!! outer/secret.env'], hardToRebuild: ['outer/secret.env'] });
     });
@@ -94,7 +233,7 @@ describe('work to lose', () => {
       const outer = path.join(dir, 'outer');
       await git(outer, 'commit', '--quiet', '--allow-empty', '-m', 'detached work');
       const head = await git(outer, 'rev-parse', '--short', 'HEAD');
-      const error = await rejection(guardWorkToLose(dir, 'recreating'));
+      const error = await rejection(guardWorkToLose(dir, 'recreating', dir));
       expect(error.extra).toStrictEqual({
         changes: [' M outer', `outer: unpushed ${head.trim()}`],
         existing: dir,
@@ -102,18 +241,20 @@ describe('work to lose', () => {
         hardToRebuild: [],
       });
     });
+  });
 
+  describe('errors and ignored files', () => {
     it('lists the submodules once', async () => {
       const dir = await nestedSubmodules();
       const log = await logGitCalls();
-      await guardWorkToLose(dir, { removing: dir });
+      await guardWorkToLose(dir, { removing: dir }, dir);
       expect(readLog(log).filter(call => call.includes(' submodule foreach '))).toHaveLength(1);
     });
 
     it('raises git_failed when it cannot list the submodules', async () => {
       const dir = await nestedSubmodules();
       writeFileSync(path.join(dir, '.gitmodules'), '[submodule "outer"\n');
-      const failure = guardWorkToLose(dir, 'recreating');
+      const failure = guardWorkToLose(dir, 'recreating', dir);
       await expect(failure).rejects.toMatchObject({ code: 'git_failed' });
       await expect(failure).rejects.toThrow(/bad config line/u);
     });
@@ -121,14 +262,15 @@ describe('work to lose', () => {
     it('raises git_failed when it cannot read the commits of a submodule', async () => {
       const dir = await nestedSubmodules();
       await git(path.join(dir, 'outer'), 'symbolic-ref', 'HEAD', 'refs/heads/unborn');
-      const failure = guardWorkToLose(dir, 'recreating');
+      const failure = guardWorkToLose(dir, 'recreating', dir);
       await expect(failure).rejects.toMatchObject({ code: 'git_failed' });
       await expect(failure).rejects.toThrow(/unknown revision/u);
     });
 
     it('raises git_failed outside a repo', async () => {
-      await expect(guardWorkToLose(tempDir('plain'), 'recreating')).rejects.toMatchObject({ code: 'git_failed' });
-      await expect(guardWorkToLose(tempDir('plain'), { removing: tempDir('main') })).rejects.toMatchObject({ code: 'git_failed' });
+      const dir = tempDir('plain');
+      await expect(guardWorkToLose(dir, 'recreating', dir)).rejects.toMatchObject({ code: 'git_failed' });
+      await expect(guardWorkToLose(dir, { removing: tempDir('main') }, dir)).rejects.toMatchObject({ code: 'git_failed' });
     });
 
     it('gives relocate each ignored file outside the rebuildable dirs to carry, in submodules at each depth too', async () => {
@@ -178,7 +320,7 @@ describe('work to lose', () => {
       const files = ['.env', 'secrets/a.pem', 'secrets/deep/b.txt', 'outer/.env.local', 'outer/inner/local.settings.json', ...rebuildable];
       writeFiles(dir, Object.fromEntries(files.map(file => [file, 'x\n'])));
       symlinkSync('missing', path.join(dir, '.env.link'));
-      const carried = await guardWorkToLose(dir, 'recreating');
+      const carried = await guardWorkToLose(dir, 'recreating', dir);
       expect(carried.toSorted()).toStrictEqual(['.env', '.env.link', 'outer/.env.local', 'outer/inner/local.settings.json', 'secrets/a.pem', 'secrets/deep/b.txt']);
     });
 
@@ -186,12 +328,12 @@ describe('work to lose', () => {
       await ignoreGlobally('*.tsbuildinfo', '*.tsbuildinfo.bak', '.venv-backup');
       const { dir } = await tmpRepo();
       writeFiles(dir, { '.venv-backup/.env': 'SECRET=2\n', 'private.tsbuildinfo/.env': 'SECRET=1\n', 'tsconfig.tsbuildinfo.bak': 'local\n' });
-      await expect(guardWorkToLose(dir, 'recreating')).resolves.toStrictEqual(['.venv-backup/.env', 'private.tsbuildinfo/.env', 'tsconfig.tsbuildinfo.bak']);
+      await expect(guardWorkToLose(dir, 'recreating', dir)).resolves.toStrictEqual(['.venv-backup/.env', 'private.tsbuildinfo/.env', 'tsconfig.tsbuildinfo.bak']);
     });
 
     it('does not stop teardown on a copy with the same bytes as the file at the same path in the main checkout', async () => {
       const { dir, main } = await copiesOfMain();
-      const error = await rejection(guardWorkToLose(dir, { removing: main }));
+      const error = await rejection(guardWorkToLose(dir, { removing: main }, dir));
       // SAFETY: guardWorkToLose sets `hardToRebuild` to the string[] of blocking files.
       const hardToRebuild = error.extra.hardToRebuild as string[];
       expect(hardToRebuild.toSorted()).toStrictEqual(['.env', 'link.pem', 'only.pem', 'ragged.bin', 'secrets']);
@@ -204,25 +346,25 @@ describe('work to lose', () => {
       const main = tempDir('main');
       writeFiles(main, { 'outer/.env.local': 'SECRET=1\n', 'outer/inner/.env.local': 'SECRET=1\n' });
       writeFiles(dir, { 'outer/.env.local': 'SECRET=1\n', 'outer/inner/.env.local': 'SECRET=2\n' });
-      const error = await rejection(guardWorkToLose(dir, { removing: main }));
+      const error = await rejection(guardWorkToLose(dir, { removing: main }, dir));
       expect(error.extra).toStrictEqual({ changes: [], existing: dir, files: ['!! outer/inner/.env.local'], hardToRebuild: ['outer/inner/.env.local'] });
     });
 
     it('gives relocate each copy to carry', async () => {
       const { dir } = await copiesOfMain();
-      const carried = await guardWorkToLose(dir, 'recreating');
+      const carried = await guardWorkToLose(dir, 'recreating', dir);
       expect(carried.toSorted()).toStrictEqual(['.env', 'full.bin', 'key.pem', 'link.pem', 'only.pem', 'ragged.bin', 'secrets']);
     });
 
     it('stops relocate on changes alone, and teardown on a hard-to-rebuild file alone', async () => {
       const repo = await tmpRepo();
       writeFileSync(path.join(repo.dir, 'a'), 'x\n');
-      const changesOnly = await rejection(guardWorkToLose(repo.dir, 'recreating'));
+      const changesOnly = await rejection(guardWorkToLose(repo.dir, 'recreating', repo.dir));
       expect(changesOnly.extra).toStrictEqual({ changes: ['?? a'], existing: repo.dir, files: ['?? a'], hardToRebuild: [] });
       const other = await tmpRepo('other');
       await ignoreGlobally('.env');
       writeFileSync(path.join(other.dir, '.env'), 'SECRET=1\n');
-      const hardToRebuildOnly = await rejection(guardWorkToLose(other.dir, { removing: tempDir('main') }));
+      const hardToRebuildOnly = await rejection(guardWorkToLose(other.dir, { removing: tempDir('main') }, other.dir));
       expect(hardToRebuildOnly.extra).toStrictEqual({ changes: [], existing: other.dir, files: ['!! .env'], hardToRebuild: ['.env'] });
     });
 
@@ -236,7 +378,7 @@ describe('work to lose', () => {
         writeFileSync(path.join(mainCheckout, name), `${name}\n`);
       }
       const openBefore = readdirSync('/dev/fd').length;
-      await expect(guardWorkToLose(repo.dir, { removing: mainCheckout })).resolves.toStrictEqual([]);
+      await expect(guardWorkToLose(repo.dir, { removing: mainCheckout }, repo.dir)).resolves.toStrictEqual([]);
       expect(readdirSync('/dev/fd').length - openBefore).toBeLessThan(names.length / 2);
     });
   });
