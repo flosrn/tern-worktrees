@@ -387,6 +387,30 @@ describe('remove command', () => {
       expect(existsSync(dir)).toBeFalsy();
     });
 
+    it('removes Python and TypeScript tool caches without --force but still protects .env', async () => {
+      await ignoreGlobally('.pytest_cache', '.ruff_cache', '.mypy_cache', '__pycache__', '.venv', '*.tsbuildinfo', '.env');
+      const dir = await addFeature();
+      const caches = [
+        '.pytest_cache/v/cache',
+        'pkg/.ruff_cache/entry',
+        '.mypy_cache/module.json',
+        'pkg/__pycache__/module.pyc',
+        '.venv/lib/package.py',
+        'pkg/tsconfig.tsbuildinfo',
+      ];
+      for (const file of caches) {
+        mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+        writeFileSync(path.join(dir, file), 'cache\n');
+      }
+      writeFileSync(path.join(dir, '.env'), 'SECRET=1\n');
+      const blocked = await cliJson(['remove', dir]);
+      expect(blocked).toMatchObject({ error: { code: 'dirty_worktree', hardToRebuild: ['.env'] } });
+      expect(readFileSync(path.join(dir, '.env'), 'utf-8')).toBe('SECRET=1\n');
+      rmSync(path.join(dir, '.env'));
+      await expect(cliJson(['remove', dir])).resolves.toMatchObject({ removed: dir });
+      expect(existsSync(dir)).toBeFalsy();
+    });
+
     it('deletes ignored files that are hard to rebuild with --force', async () => {
       await ignoreGlobally('.env');
       const dir = await addFeature();
