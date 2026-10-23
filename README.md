@@ -42,7 +42,7 @@ rm ~/.local/bin/tern-wt ~/.omp/agent/skills/tern-worktrees
 
 ### Open a worktree tab
 
-1. Press `cmd+shift+w`. The branch picker opens over the focused pane, for the repository of the current session. When the current session has no repository, the repo picker opens first.
+1. Press `cmd+shift+w`. The branch picker opens over the focused pane, for the repository of the focused pane. When that pane is in no repository, the picker uses the session's first repository. When the session has no repository, the repo picker opens first.
 2. Type to filter. The branch picker lists `New branch…`, `Other repo…`, the open pull requests, then the branches. The label of a pull request row is `#<n> <title> · <branch>`, so you can also find the row when you type part of its branch name. A branch with a worktree shows `worktree` in dim text adjacent to its name. The filter reads only the row name, not the dim text.
 3. Press Enter on a branch or a pull request. To start a new branch from `origin/<default>`, press Enter on `New branch…`. Type the branch name, then press Enter. When `tern-wt` refuses the name, a toast tells you why. The prompt then opens again and shows the name that you typed. If you press Escape, or press Enter with no name, the plugin makes no branch.
 

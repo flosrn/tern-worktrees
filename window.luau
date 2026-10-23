@@ -1649,7 +1649,10 @@ local function start(cx: WindowCx)
 		end
 		local cur = session_index(cx2).current
 		local facts = if cur ~= nil then reposOfSession[cur.id] else nil
-		local root = if facts ~= nil then facts.first else nil
+		local focused = cx2.session:focused()
+		local pane = if focused ~= nil then cx2.session:pane(focused) else nil
+		local focusedRoot = if pane ~= nil and pane.cwd ~= nil then rootOfDir[pane.cwd] else nil
+		local root = if type(focusedRoot) == "string" then focusedRoot else if facts ~= nil then facts.first else nil
 		if root ~= nil then
 			branch_picker(cx2, root)
 		else

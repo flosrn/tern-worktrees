@@ -50,6 +50,40 @@ local function choose_new_branch(): (Stub.Harness, any)
 	return plugin, cx
 end
 
+test("the hotkey opens the focused pane's repository instead of the session's first repository", function()
+	local cx = Stub.cx({ { pane = 1, tab = 1, cwd = "/r/first" }, { pane = 2, tab = 2, cwd = REPO } }, 2)
+	local plugin = Stub.load({ env = Stub.ENV })
+	local resolved =
+		'{"repos":[{"dir":"/r/first","root":"/r/first","name":"first"},{"dir":"/r/app","root":"/r/app","name":"app"}]}'
+	plugin:press(cx, resolved)
+	eq(plugin:pending("branches")[1], Stub.argv("branches", { repo = REPO }), "focused repository branches")
+	plugin:answer("branches", BRANCHES, 0, cx)
+	local picker = cx.asked[1]
+	picker.next(Stub.item(picker, "new"), nil, cx)
+	eq(cx.asked[2].opts.placeholder, "New branch from main in app", "new branch repository and default")
+	cx.asked[2].next("focused-branch", nil, cx)
+	eq(
+		plugin:pending("create")[1],
+		Stub.argv("create-branch-new", { repo = REPO, branch = "focused-branch" }),
+		"create repository"
+	)
+end)
+
+test("a focused pane outside a repository falls back to the session's first repository", function()
+	local cx = Stub.cx({ { pane = 1, tab = 1, cwd = REPO }, { pane = 2, tab = 2, cwd = "/outside" } }, 2)
+	local plugin = Stub.load({ env = Stub.ENV })
+	plugin:press(cx, '{"repos":[{"dir":"/r/app","root":"/r/app","name":"app"},{"dir":"/outside","root":null}]}')
+	eq(plugin:pending("branches")[1], Stub.argv("branches", { repo = REPO }), "session repository branches")
+end)
+
+test("a session with no repository opens the repo picker", function()
+	local cx = Stub.cx({ { pane = 1, tab = 1, cwd = "/outside" } }, 1)
+	local plugin = Stub.load({ env = Stub.ENV })
+	plugin:press(cx, '{"repos":[{"dir":"/outside","root":null}]}')
+	eq(#plugin:pending("branches"), 0, "branch calls")
+	eq(cx.asked[1].opts.placeholder, "Search repositories", "repo picker")
+end)
+
 test("the branch picker lists New branch, Other repo, pull requests, then branches", function()
 	local _, cx = open_branch_picker()
 	local opts = cx.asked[1].opts

@@ -56,6 +56,24 @@ test("a managed worktree shows its branch and its number of changed files", func
 	eq(seg.command, NEW, "command")
 end)
 
+test("clicking the worktree segment opens the focused pane's repository", function()
+	local cx = Stub.cx({ { pane = 1, tab = 1, cwd = "/r/first" }, { pane = 2, tab = 2, cwd = FEAT } }, 2)
+	local plugin = Stub.load({ env = Stub.ENV })
+	plugin.handlers.window_start(cx)
+	plugin:answer("list", LISTED, 0, cx)
+	plugin:answer("resolve", '{"repos":[]}', 0, cx)
+	local segment = segment_of(plugin, FEAT)
+	local command = string.match(segment.command, "^plugin%.tern%-worktrees%.(.+)$") :: string
+	plugin.commands[command].run(cx)
+	plugin:answer(
+		"resolve",
+		'{"repos":[{"dir":"/r/first","root":"/r/first","name":"first"},{"dir":"/wt/worktrees/app/feat","root":"/r/app","name":"app"}]}',
+		0,
+		cx
+	)
+	eq(plugin:pending("branches")[1], Stub.argv("branches", { repo = "/r/app" }), "clicked repository branches")
+end)
+
 test("an omp-owned worktree shows its branch and its number of changed files", function()
 	local plugin = started(LISTED)
 	local seg = segment_of(plugin, OMP)
