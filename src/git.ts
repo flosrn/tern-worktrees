@@ -218,8 +218,24 @@ export const updateSubmodules = async (root: string, dir: string): Promise<strin
 /** The paths of the initialized submodules of the worktree at `dir`, at each depth, relative to `dir`. A submodule comes before the submodules in it. */
 export const submodules = async (dir: string): Promise<string[]> => lines(await gitMust(dir, 'submodule', 'foreach', '--quiet', '--recursive', 'printf "%s\\n" "$displaypath"'));
 
-/** The short hashes of the commits of `HEAD` and of the local branches of the repository at `dir` that no remote branch holds. */
-export const unpushedCommits = async (dir: string): Promise<string[]> => lines(await gitMust(dir, 'rev-list', '--abbrev-commit', 'HEAD', '--branches', '--not', '--remotes'));
+/** Tells if the object store at `dir` holds `commit`. */
+const hasCommit = async (dir: string, commit: string): Promise<boolean> => await gitSucceeds(dir, 'cat-file', '-e', `${commit}^{commit}`);
+
+/** The commit recorded for `sub` at `revision` that is also in the object store of the submodule, or null. */
+export const recordedSubmoduleCommit = async (dir: string, revision: string, sub: string): Promise<string | null> => {
+  const result = await gitRun(dir, 'ls-tree', '--format=%(objectname)', revision, '--', sub);
+  const commit = result.stdout.trim();
+  if (!(await hasCommit(path.join(dir, sub), commit))) {
+    return null;
+  }
+  return commit;
+};
+
+/** The short hashes of the commits of `HEAD` and local branches not held by a remote branch or by `retained`. */
+export const unpushedCommits = async (dir: string, retained: string | null): Promise<string[]> => {
+  const kept = retained !== null && (await hasCommit(dir, retained));
+  return lines(await gitMust(dir, 'rev-list', '--abbrev-commit', 'HEAD', '--branches', '--not', '--remotes', ...(kept ? [retained] : [])));
+};
 
 /** The ignored files of the worktree at `dir`, one entry for each file, as paths relative to `dir`. It does not look into submodules. */
 export const ignoredFiles = async (dir: string): Promise<string[]> => {

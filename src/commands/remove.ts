@@ -72,7 +72,7 @@ const removeWorktree = async (ctx: Context, force: boolean): Promise<void> => {
     }
     return;
   }
-  await guardWorkToLose(ctx.target, { removing: ctx.root });
+  await guardWorkToLose(ctx.target, { removing: ctx.root }, ctx.root);
   const removal = await gitRun(ctx.root, '-c', 'status.showUntrackedFiles=all', 'worktree', 'remove', ctx.target);
   if (removal.status === 0) {
     return;
