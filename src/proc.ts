@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import type { TernProcess } from './tern.ts';
 
 /** The error codes the CLI reports in its error envelope. */
 export type ErrorCode =
@@ -10,13 +11,22 @@ export type ErrorCode =
   | 'path_conflict'
   | 'worktree_exists_elsewhere'
   | 'dirty_worktree'
+  | 'busy_tabs'
   | 'git_failed'
   | 'gh_failed'
   | 'omp_failed'
   | 'tern_failed';
 
+/** A busy block and its placement, reported by the removal guard. */
+export interface BusyBlock {
+  block: number;
+  tab: number;
+  session: number;
+  process: TernProcess;
+}
+
 /** The added fields of the error envelope, for example the conflicting path or the changed files. */
-export type ErrorExtra = Record<string, string | string[]>;
+export type ErrorExtra = Record<string, string | string[] | BusyBlock[]>;
 
 /** A failure that the CLI reports with a code, a message and added fields. */
 export class CliError extends Error {

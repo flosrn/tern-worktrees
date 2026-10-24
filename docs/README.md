@@ -144,6 +144,10 @@ A tab with panes in two or more worktrees gets one picker for each worktree, one
 
 A tab that shares its worktree with a different open tab closes with no picker. `tern-wt remove` removes the worktree before it closes the tabs, so an agent teardown shows no picker.
 
+The CLI checks for busy blocks before removal, while the plugin's picker controls its own tab close. Read the [remove contract](https://github.com/riicodespretty/tern-worktrees/blob/main/skills/tern-worktrees/SKILL.md#remove) for `busy_tabs`, the idle-process rule, override flags, inspection failures and the limits of the snapshot check. The [Carly remove arguments](https://github.com/riicodespretty/tern-worktrees#remove-a-worktree-safely) expose the same overrides to agents.
+
+The plugin's teardown picker calls `remove --keep-tab`, then closes the tab after success. This path does not examine running processes and is not protected by `busy_tabs`. The picker shown after a tab closes cannot protect the processes of that tab.
+
 Tern can park a pane: the pane goes out of its tab, and its program goes on in the deck of the session. A parked pane has no tab. A parked pane in a worktree counts as a pane of a different tab. Thus, a park that closes the last tab of a worktree opens no picker.
 
 A worktree can have one or more parked panes and no pane in a tab. When the user opens a worktree of this type, the window half calls `unpark` on the first parked pane. The window half puts that pane in a tab of the session of the repository, with the name of the branch:
