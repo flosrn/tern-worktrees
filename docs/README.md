@@ -95,7 +95,7 @@ The native picker has no keys of its own for an item. Thus Tear down has no `⌫
 
 ### Pickers and sessions
 
-When the hotkey runs, the window half sends the working directory of each pane to `tern-wt resolve`, which gives the repository root of each one. The repository of the current session is the root of the first pane, in pane order, of its tabs. The current session gets the branch picker of that repository, else the repo picker opens. When `resolve` fails, the picker still opens. When the root of a repository is unknown, that repository matches no session.
+When the hotkey runs, the window half sends the working directory of each pane to `tern-wt resolve`, which gives the repository root of each one. The branch picker opens for the repository of the pane with the focus. When that pane is in no repository, it uses the first repository in pane order of the current session's tabs. When the session has no repository, the repo picker opens. When `resolve` fails, the picker still opens. When the root of a repository is unknown, that repository matches no session.
 
 A new worktree tab opens in the repository session, or in a new session when the repository has none. The window half looks at all the panes in the tabs of each session, not only the first pane. It selects the repository session in this order:
 
@@ -180,7 +180,7 @@ It reads the worktree index from `tern.kv`, expands a leading `~` in the `cwd` o
 
 ### The worktree segment
 
-`tern.chrome.status` gives the worktree segment of the pane with the focus: the branch, plus ` · <n>` when the worktree has `n` changed files. A worktree with a detached `HEAD` shows `detached`. The tone applies to the full segment: muted when the worktree has no changed files, and the warning tone when it has one or more. The formatter reads only the worktree index. Tern disables a formatter that runs for more than 4 ms, and a formatter cannot call `tern.chrome.refresh`. Tern keeps the segments that a formatter gave, so after an index write that changes a segment, the window half calls `tern.chrome.refresh` one time. A change to a segment is a new or a removed worktree, or a different branch or number of changed files. A click on the segment runs the `New worktree tab` command, as the hotkey does: it opens the branch picker of the repository of the current session, else the repo picker.
+`tern.chrome.status` gives the worktree segment of the pane with the focus: the branch, plus ` · <n>` when the worktree has `n` changed files. A worktree with a detached `HEAD` shows `detached`. The tone applies to the full segment: muted when the worktree has no changed files, and the warning tone when it has one or more. The formatter reads only the worktree index. Tern disables a formatter that runs for more than 4 ms, and a formatter cannot call `tern.chrome.refresh`. Tern keeps the segments that a formatter gave, so after an index write that changes a segment, the window half calls `tern.chrome.refresh` one time. A change to a segment is a new or a removed worktree, or a different branch or number of changed files. A click on the segment runs the `New worktree tab` command, as the hotkey does: it opens the branch picker of the repository of the pane with the focus, else the session's first repository, else the repo picker.
 
 ### Setup commands
 
