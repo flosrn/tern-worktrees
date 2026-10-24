@@ -85,14 +85,14 @@ When git refuses the move, `tern-wt` makes the worktree again in the root with p
 
 An omp-owned worktree of the branch needs no relocation: `tern-wt` opens its tab where it is.
 
-Ignored files that are hard to rebuild, for example `.env` or `*.pem`, do not stop the rebuild: `tern-wt` copies them into the new worktree, in the submodules too, and lists them in `carried`. An ignored file is a build or install output when a part of its path is `node_modules`, `dist`, `build`, `coverage`, `.DS_Store`, `.cache`, `.next`, `.nuxt`, `.output` or `.turbo`. Those files stay behind. When a step after the copy fails, the error names the temporary folder that keeps the copies.
+Ignored files that are hard to rebuild, for example `.env` or `*.pem`, do not stop the rebuild: `tern-wt` copies them into the new worktree, in the submodules too, and lists them in `carried`. An ignored file is build, install or tool output when a part of its path is `node_modules`, `dist`, `build`, `coverage`, `.DS_Store`, `.cache`, `.next`, `.nuxt`, `.output`, `.turbo`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `__pycache__` or `.venv`, or its filename ends with `.tsbuildinfo`. Those files stay behind. When a step after the copy fails, the error names the temporary folder that keeps the copies.
 
 ### Close a worktree tab
 
 When you close a worktree tab, a picker opens with the placeholder `Closing worktree tab · <path>`. It shows two items. Keep worktree is the first item, so Enter keeps the worktree:
 
 - Keep worktree: closes the tab and keeps the worktree.
-- Tear down: removes the worktree, applies the teardown policy to its branch, then closes the tab. Its dim text says what the teardown policy does with the branch, from `tern-wt config` when the picker opens. When the options file is invalid, it has no dim text. Ignored build and install output goes with the worktree. Ignored files that are hard to rebuild stop the teardown, as uncommitted changes do. A copy goes with the worktree: an ignored file with the same bytes as the file at the same path in the main checkout, for example the `.env` that an omp clone copied. A changed copy stops the teardown.
+- Tear down: removes the worktree, applies the teardown policy to its branch, then closes the tab. Its dim text says what the teardown policy does with the branch, from `tern-wt config` when the picker opens. When the options file is invalid, it has no dim text. Ignored build, install and tool output goes with the worktree. Ignored files that are hard to rebuild stop the teardown, as uncommitted changes do. A copy goes with the worktree: an ignored file with the same bytes as the file at the same path in the main checkout, for example the `.env` that an omp clone copied. A changed copy stops the teardown.
 
 Escape keeps the tab and the worktree. The picker has no `⌫` or `⌘⌫` keys. To select an item, type to filter the list or use the arrow keys. Then press Enter. When the picker fails to open, a toast shows the error. The tab closes, and the worktree stays.
 

@@ -148,6 +148,12 @@ describe('work to lose', () => {
         '.nuxt',
         '.output',
         '.turbo',
+        '.pytest_cache',
+        '.ruff_cache',
+        '.mypy_cache',
+        '__pycache__',
+        '.venv',
+        '*.tsbuildinfo',
       );
       const rebuildable = [
         'node_modules/x/index.js',
@@ -162,12 +168,25 @@ describe('work to lose', () => {
         '.turbo/t',
         'outer/build/out.o',
         'outer/inner/.cache/c',
+        'outer/.pytest_cache/v/cache',
+        'outer/.ruff_cache/entry',
+        'outer/inner/.mypy_cache/module.json',
+        'outer/inner/__pycache__/module.pyc',
+        'outer/.venv/lib/package.py',
+        'outer/inner/tsconfig.tsbuildinfo',
       ];
       const files = ['.env', 'secrets/a.pem', 'secrets/deep/b.txt', 'outer/.env.local', 'outer/inner/local.settings.json', ...rebuildable];
       writeFiles(dir, Object.fromEntries(files.map(file => [file, 'x\n'])));
       symlinkSync('missing', path.join(dir, '.env.link'));
       const carried = await guardWorkToLose(dir, 'recreating');
       expect(carried.toSorted()).toStrictEqual(['.env', '.env.link', 'outer/.env.local', 'outer/inner/local.settings.json', 'secrets/a.pem', 'secrets/deep/b.txt']);
+    });
+
+    it('carries ignored files whose parent or filename only resembles tool output', async () => {
+      await ignoreGlobally('*.tsbuildinfo', '*.tsbuildinfo.bak', '.venv-backup');
+      const { dir } = await tmpRepo();
+      writeFiles(dir, { '.venv-backup/.env': 'SECRET=2\n', 'private.tsbuildinfo/.env': 'SECRET=1\n', 'tsconfig.tsbuildinfo.bak': 'local\n' });
+      await expect(guardWorkToLose(dir, 'recreating')).resolves.toStrictEqual(['.venv-backup/.env', 'private.tsbuildinfo/.env', 'tsconfig.tsbuildinfo.bak']);
     });
 
     it('does not stop teardown on a copy with the same bytes as the file at the same path in the main checkout', async () => {

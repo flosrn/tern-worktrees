@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fix
+
+- Treat ignored Python tool caches, virtual environments and TypeScript build info as output that tools make again. Before, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `__pycache__`, `.venv` and `*.tsbuildinfo` stopped worktree removal without `--force`, and Relocate copied them into the worktree it made again
+
 ## [0.3.2](https://github.com/riicodespretty/tern-worktrees/releases/tag/0.3.2 "2026-10-14")
 
 ### Fix

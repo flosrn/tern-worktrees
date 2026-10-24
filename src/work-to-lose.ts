@@ -9,8 +9,24 @@ import { CliError } from './proc.ts';
  */
 export type Guarded = 'recreating' | { removing: string };
 
-/** The path segments of the ignored files that a build or an install makes again. An ignored file with none of them in its path is hard to rebuild. */
-export const REBUILDABLE: readonly string[] = ['node_modules', 'dist', 'build', 'coverage', '.DS_Store', '.cache', '.next', '.nuxt', '.output', '.turbo'];
+/** The path segments of ignored build, install and tool output. TypeScript build info is matched by filename suffix separately. */
+export const REBUILDABLE: readonly string[] = [
+  'node_modules',
+  'dist',
+  'build',
+  'coverage',
+  '.DS_Store',
+  '.cache',
+  '.next',
+  '.nuxt',
+  '.output',
+  '.turbo',
+  '.pytest_cache',
+  '.ruff_cache',
+  '.mypy_cache',
+  '__pycache__',
+  '.venv',
+];
 
 /** The size of each chunk that {@link sameFile} compares. */
 const COMPARE_CHUNK = 64 * 1024;
@@ -77,7 +93,7 @@ const hardToRebuildIn = async (dir: string, subs: string[]): Promise<string[]> =
     return files.map(file => `${sub}/${file}`);
   };
   const [own, nested] = await Promise.all([ignoredFiles(dir), Promise.all(subs.map(ignoredIn))]);
-  return [...own, ...nested.flat()].filter(file => !file.split('/').some(segment => REBUILDABLE.includes(segment)));
+  return [...own, ...nested.flat()].filter(file => !file.endsWith('.tsbuildinfo') && !file.split('/').some(segment => REBUILDABLE.includes(segment)));
 };
 
 /**

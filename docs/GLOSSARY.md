@@ -51,7 +51,7 @@ To move the worktree of a branch into the worktree root from a directory that is
 _Avoid_: Adopt, migrate, import
 
 **Hard-to-rebuild file**:
-An ignored file that no build or install makes again, for example a `.env` file. Its loss counts as work to lose. Ignored build output and installed packages are not hard to rebuild. At teardown, a copy with the bytes of the file at the same path in the main checkout also does not count.
+An ignored file that no build, install or tool run makes again, for example a `.env` file. Its loss counts as work to lose. Ignored build output, installed packages and tool caches are not hard to rebuild. At teardown, a copy with the bytes of the file at the same path in the main checkout also does not count.
 _Avoid_: Secret file, precious file
 
 **Work to lose**:
