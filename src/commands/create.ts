@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { loadConfig, setupCommands } from '../config.ts';
+import { chooseIssueBranch, readIssue, recordIssue, resolveIssue } from '../create-issue.ts';
+import type { CreatedIssue, IssueData, IssueInput, SuggestedIssue } from '../create-issue.ts';
 import { fetchOrigin, gitMust, gitRun, gitSucceeds, requireRepoRoot, updateSubmodules, worktrees } from '../git.ts';
 import type { Worktree } from '../git.ts';
 import { defaultBranch, ghMust, ghMustWith, readOrigin } from '../github.ts';
@@ -17,13 +19,10 @@ import { guardWorkToLose } from '../work-to-lose.ts';
 
 /** How `create` got the worktree. */
 export type CreateStatus = 'created' | 'relocated' | 'reused';
-
 /** How long `create` waits for the shell prompt of the tab it opened before it types the setup commands. */
 const SETUP_PROMPT_SECONDS = 30;
-
 /** Who owns the worktree that `create` gives: `tern` or `omp` as {@link worktreeOwner} says, or `main` for the main checkout. */
 type Owner = Exclude<WorktreeOwner, null> | 'main';
-
 /** The Tern tab that shows the worktree. */
 export interface CreatedTab {
   block: number;
@@ -46,6 +45,7 @@ export interface CreateResult {
   status: CreateStatus;
   tab: CreatedTab | null;
   warnings: string[];
+  issue?: CreatedIssue;
 }
 
 interface Options {
@@ -55,6 +55,8 @@ interface Options {
   'pr'?: string;
   'relocate': boolean;
   'repo'?: string;
+  'issue'?: string;
+  'suggest': boolean;
 }
 
 /** The hard-to-rebuild files of the first worktree, and the temporary folder that keeps their copies. */
@@ -98,7 +100,6 @@ interface Placed {
   path: string;
   status: CreateStatus;
 }
-
 /** How to add a worktree: at `start`, detached or on `newBranch` when it is set, with `origin/<newBranch>` as upstream when `track` is true. */
 interface AddSpec {
   detach: boolean;
@@ -106,8 +107,7 @@ interface AddSpec {
   start: string;
   track: boolean;
 }
-
-type Source = { branch: string; isNew: boolean } | { pr: string };
+type Source = { branch: string; isNew: boolean } | { pr: string } | { issue: IssueInput; data: IssueData; override: string | undefined };
 
 interface CheckedOptions {
   repo: string;
@@ -121,11 +121,13 @@ const parse = (args: string[]): Options =>
     args,
     options: {
       'branch': { type: 'string' },
+      'issue': { type: 'string' },
       'new': { default: false, type: 'boolean' },
       'no-tab': { default: false, type: 'boolean' },
       'pr': { type: 'string' },
       'relocate': { default: false, type: 'boolean' },
       'repo': { type: 'string' },
+      'suggest': { default: false, type: 'boolean' },
     },
   }).values;
 
@@ -168,6 +170,9 @@ const pullRequestTarget = async (ctx: Context, pr: string): Promise<Target> => {
 };
 
 const sourceTarget = async (ctx: Context, source: Source): Promise<Target> => {
+  if ('issue' in source) {
+    return await sourceTarget(ctx, await chooseIssueBranch(source.issue, source.data.view, source.override));
+  }
   if ('branch' in source) {
     return { branch: source.branch, forkPr: null, isNew: source.isNew, ompPrBranch: null, path: worktreePath(ctx.wtRoot, ctx.repoName, source.branch), pr: null };
   }
@@ -465,25 +470,78 @@ const typeSetup = async (ctx: Context, line: string, tab: CreatedTab | null): Pr
   }
 };
 
+interface PreparedCreate {
+  checked: CheckedOptions;
+  issue: { input: IssueInput; data: IssueData } | null;
+  warnings: string[];
+}
+
+/** Resolves issue input before the shared worktree placement flow. */
+const prepareCreate = async (options: Options): Promise<PreparedCreate | SuggestedIssue> => {
+  if (options.suggest && options.issue === undefined) {
+    throw badArgs('--suggest needs --issue');
+  }
+  if (options.issue === undefined) {
+    return { checked: checkOptions(options), issue: null, warnings: [] };
+  }
+  if (options.pr !== undefined || options.new) {
+    throw badArgs('--issue does not combine with --pr or --new');
+  }
+  const issueInput = await resolveIssue(options.issue, options.repo);
+  if (issueInput.kind === 'pr') {
+    if (options.branch !== undefined || options.suggest) {
+      throw badArgs('--branch and --suggest do not apply to a pull request URL');
+    }
+    return { checked: { repo: issueInput.root, source: { pr: issueInput.number } }, issue: null, warnings: [] };
+  }
+  const issueData = await readIssue(issueInput);
+  const warnings = issueData.view.state === 'CLOSED' ? ['This issue is closed.'] : [];
+  if (options.suggest) {
+    const { branch } = await chooseIssueBranch(issueInput, issueData.view, options.branch);
+    return { branch, issue: issueData.issue, repo: issueInput.root, warnings };
+  }
+  return { checked: { repo: issueInput.root, source: { data: issueData, issue: issueInput, override: options.branch } }, issue: { data: issueData, input: issueInput }, warnings };
+};
+
 /**
- * `create --repo <dir> (--branch <name> [--new] | --pr <number>) [--relocate] [--no-tab]`:
- * creates or reuses the tern-managed worktree of a branch or pull request, and opens or focuses its Tern tab.
+ * `create --repo <dir> (--branch <name> [--new] | --pr <number>) [--relocate] [--no-tab]`,
+ * or `create --issue <url|#n|n> [--repo <dir>] [--branch <name>] [--suggest] [--relocate] [--no-tab]`:
+ * creates or reuses the tern-managed worktree of a branch, issue or pull request, and opens or focuses its Tern tab.
  * An omp-owned worktree of the branch opens where it is, and so do the omp checkout of a same-repository pull request, on branch `pr-<n>`, and the main checkout.
  * omp clone mode, the omp setting `worktree.clone` in the repository, makes new worktrees through omp.
  */
-export const run = async (args: string[]): Promise<CreateResult> => {
+export const run = async (args: string[]): Promise<CreateResult | SuggestedIssue> => {
   const options = parse(args);
-  const { repo, source } = checkOptions(options);
+  const prepared = await prepareCreate(options);
+  if ('branch' in prepared) {
+    return prepared;
+  }
+  const { checked, issue, warnings: issueWarnings } = prepared;
+  const { repo, source } = checked;
   const root = await requireRepoRoot(repo);
   const [wtRoot, probe, origin] = await Promise.all([worktreeRoot(), ompSettings(root), readOrigin(root)]);
   const fetchWarning = origin.present ? await fetchOrigin(root, true) : null;
-  const warnings = [probe.warning, fetchWarning].filter(warning => warning !== null);
+  const warnings = [...issueWarnings, ...[probe.warning, fetchWarning].filter(warning => warning !== null)];
   const clone = probe.settings?.clone === true ? probe.omp : null;
   const ctx: Context = { clone, fetchWarning, origin, repoName: path.basename(root), root, warnings, wtRoot };
   const target = await sourceTarget(ctx, source);
   const placed = await placeWorktree(ctx, target, options.relocate);
+  if (issue !== null) {
+    await recordIssue(root, placed.branch, issue.data.issue, issue.input.repo);
+  }
   const tab = options['no-tab'] ? null : await tryOpenTab(ctx, placed);
   const line = setupLine(ctx, placed.status);
-  const setup = line === null ? null : { line, typed: await typeSetup(ctx, line, tab) };
-  return { branch: placed.branch, carried: placed.carried, owner: placed.owner, path: placed.path, repo: root, setup, status: placed.status, tab, warnings: ctx.warnings };
+  const { status, ...location } = placed;
+  const result: CreateResult = {
+    ...location,
+    repo: root,
+    setup: line === null ? null : { line, typed: await typeSetup(ctx, line, tab) },
+    status,
+    tab,
+    warnings: ctx.warnings,
+  };
+  if (issue !== null) {
+    result.issue = issue.data.issue;
+  }
+  return result;
 };

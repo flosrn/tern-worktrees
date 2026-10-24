@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Feature
+
+- Add `create --issue <url|#n>` to derive or reuse an issue branch, record `branch.<branch>.ternIssue`, and open its worktree tab. Support `--branch` overrides, read-only `--suggest`, pull request URLs and `not_cloned` with the clone path. Add `issueBranch.fixLabels` and opt-in `issueBranch.linkOnGitHub` for remote branch creation with `gh issue develop`. Tell agents to use `--issue` for issue work and `Closes <owner>/<repo>#<n>` in PR bodies. Before, agents invented branch names and recorded issue links by hand
+- Add `From issue…` to the branch picker and `New worktree from issue` to the palette, with the command `plugin.tern-worktrees.from-issue`. Pre-fill an issue prompt from the clipboard, let the user edit the derived branch name, and detect issue URLs in `New branch…`. Use a matching open repository session or offer to clone the repository. Before, users had to select a repository and invent the branch name to start from an issue
+
 ### Fix
 
 - Treat ignored Python tool caches, virtual environments and TypeScript build info as output that tools make again. Before, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `__pycache__`, `.venv` and `*.tsbuildinfo` stopped worktree removal without `--force`, and Relocate copied them into the worktree it made again

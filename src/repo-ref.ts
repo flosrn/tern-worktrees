@@ -25,3 +25,16 @@ export const parseGithubUrl = (url: string): GithubRepoRef | null => {
   const groups = GITHUB_URL.exec(url)?.groups;
   return groups ? { name: groups.name, owner: groups.owner } : null;
 };
+
+/** Reads a GitHub issue or pull request URL, or a positive issue number with an optional `#`. Relative issue numbers have no repository. */
+export const parseIssueRef = (text: string): { repo: GithubRepoRef | null; number: string; kind: 'issue' | 'pr' } | null => {
+  if (/^#?[1-9][0-9]*$/u.test(text)) {
+    return { kind: 'issue', number: text.replace('#', ''), repo: null };
+  }
+  const groups = /^https:\/\/github\.com\/(?<owner>[^/]+)\/(?<name>[^/]+)\/(?<kind>issues|pull)\/(?<number>[1-9][0-9]*)(?:[/?#].*)?$/u.exec(text)?.groups;
+  if (!groups) {
+    return null;
+  }
+  const repo = parseRepoRef(`${groups.owner}/${groups.name}`);
+  return repo ? { kind: groups.kind === 'pull' ? 'pr' : 'issue', number: groups.number, repo } : null;
+};

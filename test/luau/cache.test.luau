@@ -159,7 +159,7 @@ test("the third open shows the answer of the background branches", function()
 	open(plugin, cx)
 	plugin:answer("branches", UPDATED, 0, cx)
 	eq(open(plugin, cx), 3, "pickers after the third open, with branches unanswered")
-	eq(item_ids(cx.asked[3]), "new other b:main b:x b:y*", "items of the third picker")
+	eq(item_ids(cx.asked[3]), "new from-issue other b:main b:x b:y*", "items of the third picker")
 end)
 
 test("at most one background branches runs per repository", function()
@@ -282,7 +282,7 @@ test("a teardown during the first branches runs one more branches after it", fun
 	eq(plugin:pending_line("branches"), OFFLINE_ARGV, "rerun")
 	plugin:answer("branches", STALE, 0, cx)
 	open(plugin, cx)
-	eq(item_ids(cx.asked[#cx.asked]), "new other pr:7 b:main", "items after the teardown")
+	eq(item_ids(cx.asked[#cx.asked]), "new from-issue other pr:7 b:main", "items after the teardown")
 end)
 
 test("a press after a first branches that never answered for 120 s starts it again", function()
@@ -318,7 +318,7 @@ test("a press after a background branches that never answered for 120 s starts a
 	eq(toast_lines(cx), REFRESHING .. "; " .. REFRESHING, "toasts after a press after 120 s")
 	plugin:answer("branches", UPDATED, 0, cx)
 	open(plugin, cx)
-	eq(item_ids(cx.asked[#cx.asked]), "new other b:main b:x b:y*", "items after the new background branches")
+	eq(item_ids(cx.asked[#cx.asked]), "new from-issue other b:main b:x b:y*", "items after the new background branches")
 end)
 
 test("choosing a branch in a cached picker creates its worktree", function()
@@ -338,7 +338,7 @@ test("a create refreshes the cache offline and keeps its pull requests and defau
 	plugin:answer("branches", OFFLINE, 0, cx)
 	open(plugin, cx)
 	local picker = cx.asked[#cx.asked]
-	eq(item_ids(picker), "new other pr:7 b:main b:x b:y*", "items after the create")
+	eq(item_ids(picker), "new from-issue other pr:7 b:main b:x b:y*", "items after the create")
 	eq(picker.opts.items[1].detail, "from main", "default branch after the create")
 end)
 
@@ -352,7 +352,7 @@ test("a create during an online background branches runs one offline after it", 
 	eq(plugin:pending_line("branches"), OFFLINE_ARGV, "rerun")
 	plugin:answer("branches", OFFLINE, 0, cx)
 	open(plugin, cx)
-	eq(item_ids(cx.asked[#cx.asked]), "new other b:main b:x b:y*", "items after the create")
+	eq(item_ids(cx.asked[#cx.asked]), "new from-issue other b:main b:x b:y*", "items after the create")
 end)
 
 test("an open during an offline refresh runs one online after it", function()
@@ -368,7 +368,7 @@ test("an open during an offline refresh runs one online after it", function()
 	plugin:answer("branches", UPDATED, 0, cx)
 	eq(toast_lines(cx), REFRESHING .. "; " .. CHANGED, "toasts after the online rerun")
 	open(plugin, cx)
-	eq(item_ids(cx.asked[#cx.asked]), "new other b:main b:x b:y*", "items after the online rerun")
+	eq(item_ids(cx.asked[#cx.asked]), "new from-issue other b:main b:x b:y*", "items after the online rerun")
 end)
 
 test("a teardown refreshes the cache offline", function()
@@ -380,7 +380,7 @@ test("a teardown refreshes the cache offline", function()
 	eq(plugin:pending_line("branches"), OFFLINE_ARGV, "branches calls after the teardown")
 	plugin:answer("branches", STALE, 0, cx)
 	open(plugin, cx)
-	eq(item_ids(cx.asked[#cx.asked]), "new other pr:7 b:main", "items after the teardown")
+	eq(item_ids(cx.asked[#cx.asked]), "new from-issue other pr:7 b:main", "items after the teardown")
 end)
 
 runner.finish()

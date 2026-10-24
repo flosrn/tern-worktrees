@@ -33,8 +33,23 @@ describe('config command', () => {
   });
 
   it('gives the values of the options file', () => {
-    writeFileSync(file, JSON.stringify({ cloneRoot: '/src', hotkeys: { new: ['ctrl+g'] }, setup: { 'o/n': ['npm ci'] }, teardown: 'worktree+branch' }));
-    expect(run([])).toStrictEqual({ cloneRoot: '/src', hotkeys: { new: ['ctrl+g'] }, setup: { 'o/n': ['npm ci'] }, teardown: 'worktree+branch' });
+    writeFileSync(
+      file,
+      JSON.stringify({
+        cloneRoot: '/src',
+        hotkeys: { new: ['ctrl+g'] },
+        issueBranch: { fixLabels: ['defect'], linkOnGitHub: true },
+        setup: { 'o/n': ['npm ci'] },
+        teardown: 'worktree+branch',
+      }),
+    );
+    expect(run([])).toStrictEqual({
+      cloneRoot: '/src',
+      hotkeys: { new: ['ctrl+g'] },
+      issueBranch: { fixLabels: ['defect'], linkOnGitHub: true },
+      setup: { 'o/n': ['npm ci'] },
+      teardown: 'worktree+branch',
+    });
   });
 
   it('prints the options as one JSON line through main', async () => {
@@ -42,7 +57,7 @@ describe('config command', () => {
     await expect(main(['config'])).resolves.toStrictEqual({
       code: 0,
       stderr: '',
-      stdout: `${JSON.stringify({ cloneRoot: '/home/me/Developer', hotkeys: { new: ['cmd+shift+w'] }, setup: {}, teardown: 'worktree' })}\n`,
+      stdout: `${JSON.stringify({ cloneRoot: '/home/me/Developer', hotkeys: { new: ['cmd+shift+w'] }, issueBranch: { fixLabels: ['bug', 'fix', 'regression', 'hotfix'], linkOnGitHub: false }, setup: {}, teardown: 'worktree' })}\n`,
     });
   });
 

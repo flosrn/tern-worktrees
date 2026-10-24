@@ -5,7 +5,7 @@ import type { CommandModule } from '../src/cli.ts';
 import { commandLoader, main } from '../src/cli.ts';
 import { CliError, must } from '../src/proc.ts';
 import type { Sandbox } from './helpers.ts';
-import { contract, gitShim, managedPath, REPO_DIR, spawnCli, tempDir, tmpRepo, useSandbox } from './helpers.ts';
+import { contract, ghFixture, gitShim, managedPath, REPO_DIR, spawnCli, tempDir, tmpRepo, useGithubOrigin, useSandbox } from './helpers.ts';
 
 interface Envelope {
   error: { code: string; message: string };
@@ -50,7 +50,7 @@ describe('cli', () => {
       await expect(main(['resolve', repo.dir])).resolves.toStrictEqual({
         code: 0,
         stderr: '',
-        stdout: `${JSON.stringify({ repos: [{ dir: repo.dir, name: 'demo', owner: null, root: repo.dir }] })}\n`,
+        stdout: `${JSON.stringify({ repos: [{ dir: repo.dir, name: 'demo', origin: null, owner: null, root: repo.dir }] })}\n`,
       });
     });
 
@@ -62,7 +62,23 @@ describe('cli', () => {
       await expect(main([])).resolves.toStrictEqual({ code: 1, stderr: 'unknown command \n', stdout: envelope('bad_args', 'unknown command ') });
     });
 
-    it.each(COMMANDS)('loads %s and turns an unknown option into bad_args', async name => {
+    it('loads create, rejects unknown options and derives an issue branch', async () => {
+      const result = await main(['create', '--nope']);
+      const { error } = parseEnvelope(result.stdout);
+      expect([result.code, error.code]).toStrictEqual([1, 'bad_args']);
+      expect(error.message).toContain("'--nope'");
+      const repo = await tmpRepo('aoyama');
+      await useGithubOrigin();
+      ghFixture(
+        ['issue', 'view', '42', '--repo', 'virtusize/aoyama', '--json', 'number,title,labels,issueType,state'],
+        JSON.stringify({ issueType: null, labels: [], number: 42, state: 'OPEN', title: 'a an and au aux de des du en et for in la le les of on the to un une dashboard' }),
+      );
+      const suggestion = await main(['create', '--repo', repo.dir, '--issue', '#42', '--suggest']);
+      expect(suggestion.code).toBe(0);
+      expect(suggestion.stdout).toContain('"branch":"feat/42-dashboard"');
+    });
+
+    it.each(COMMANDS.filter(name => name !== 'create'))('loads %s and turns an unknown option into bad_args', async name => {
       const result = await main([name, '--nope']);
       const { error } = parseEnvelope(result.stdout);
       expect([result.code, error.code]).toStrictEqual([1, 'bad_args']);
@@ -71,7 +87,17 @@ describe('cli', () => {
 
     it('accepts the argv of each plugin call in the argv contract', async () => {
       vi.stubEnv('HOME', tempDir('home'));
-      const vars = { branch: 'x', dir: sandbox.tmp, nameWithOwner: 'me/app', pr: '7', repo: sandbox.tmp, visibility: 'private', worktree: managedPath('x', 'app') };
+      const vars = {
+        branch: 'x',
+        dir: sandbox.tmp,
+        issue: 'https://github.com/me/app/issues/42',
+        nameWithOwner: 'me/app',
+        pr: '7',
+        repo: sandbox.tmp,
+        text: '-bad',
+        visibility: 'private',
+        worktree: managedPath('x', 'app'),
+      };
       // SAFETY: `argv.json` maps the name of each plugin call to its arguments, a list of strings.
       const calls = Object.entries(contract('argv', vars) as Record<string, string[]>);
       const rejected = await Promise.all(
@@ -121,7 +147,7 @@ describe('cli', () => {
 
     it('runs the bin/tern-wt shim end to end', () => {
       expect([spawnCli(['resolve', '/tmp']), spawnCli(['nope'])]).toStrictEqual([
-        { status: 0, stderr: '', stdout: `${JSON.stringify({ repos: [{ dir: '/tmp', name: null, owner: null, root: null }] })}\n` },
+        { status: 0, stderr: '', stdout: `${JSON.stringify({ repos: [{ dir: '/tmp', name: null, origin: null, owner: null, root: null }] })}\n` },
         { status: 1, stderr: 'unknown command nope\n', stdout: envelope('bad_args', 'unknown command nope') },
       ]);
     });

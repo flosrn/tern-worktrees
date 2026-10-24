@@ -101,7 +101,7 @@ describe('create command', () => {
     it('warns when the fetch fails and goes on', async () => {
       await git(repo.dir, 'remote', 'set-url', 'origin', path.join(tempDir('gone'), 'missing.git'));
       const result = await run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab']);
-      expect(result.status).toBe('created');
+      expect(result).toMatchObject({ status: 'created' });
       expect(result.warnings).toHaveLength(1);
       expect(result.warnings[0]).toMatch(/^fetch failed: fatal: .*missing\.git.*\S$/su);
     });

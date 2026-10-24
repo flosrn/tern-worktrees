@@ -34,6 +34,10 @@ _Avoid_: Project session, workspace
 A row in the Tern command palette that opens the worktree tab of one branch or pull request.
 _Avoid_: Palette entry, worktree command
 
+**Issue branch**:
+A branch made or reused by `create --issue`, named `<prefix>/<number>-<slug>` unless the user overrides the name. The prefix is `fix` for a `Bug` issue type or a label in `issueBranch.fixLabels`, otherwise `feat`. Its `branch.<branch>.ternIssue` git setting records the issue URL. This local association writes nothing on GitHub unless `issueBranch.linkOnGitHub` is true.
+_Avoid_: Issue worktree, ticket branch
+
 **Worktree variables**:
 The environment variables `TERN_WT_PATH`, `TERN_WT_MAIN` and `TERN_WT_BRANCH` of a shell that starts in a worktree in the worktree root. They name the worktree, its main checkout and its branch.
 _Avoid_: Worktree env, `TERN_WT_ROOT`
@@ -83,7 +87,7 @@ The form `<owner>/<name>` that identifies a GitHub repository, for example in `c
 _Avoid_: Full name, repo path
 
 **Options file**:
-The file of user settings for the plugin: the teardown policy, the clone root, the hotkeys and the setup commands.
+The file of user settings for the plugin: the teardown policy, the clone root, the hotkeys, the issue branch rules and the setup commands.
 _Avoid_: Config, settings file
 
 **Setup commands**:
@@ -95,5 +99,5 @@ The list from which the user selects a repository: one open in a session, one on
 _Avoid_: Project picker
 
 **Branch picker**:
-The list of the branches and pull requests of one repository. The user selects one, or selects `New branch…` and types the name of a new branch.
+The list of the branches and pull requests of one repository. The user selects one, selects `New branch…` to type a new branch name, or selects `From issue…` to derive an issue branch from a GitHub issue.
 _Avoid_: Worktree picker

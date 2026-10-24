@@ -1,6 +1,7 @@
 {
   "cloneRoot": "{{home}}/Developer",
   "hotkeys": { "new": ["cmd+shift+w"] },
+  "issueBranch": { "fixLabels": ["bug", "fix", "regression", "hotfix"], "linkOnGitHub": false },
   "setup": {},
   "teardown": "worktree+merged-branch"
 }

@@ -10,6 +10,8 @@ description: Use to create, list, relocate or tear down git worktrees as Tern ta
 ## Rules
 
 - Use `tern-wt` for worktrees, not `git worktree` or `orca worktree`.
+- For work on an issue, use `tern-wt create --issue <url>` (or the plugin's `create` export with `issue`). This derives the branch and records `ternIssue`. Use `--branch --new` alone only for work with no issue.
+- Put `Closes <owner>/<repo>#<n>` in the PR body, or `Closes #<n>` when the issue is in the same repository.
 - Run `remove` only on a worktree you created in this session, or one the user names.
 - Pass `remove --force` only after the user says yes: it discards work to lose, but does not permit closing busy tabs.
 - On `busy_tabs`, show the user the reported processes. Pass `--close-busy-tabs` only after the user agrees to close them, separately from approval for `--force`.
@@ -32,28 +34,41 @@ When omp is on disk but `omp config list --json` fails in `/`, the worktree root
 
 `tern-wt create --repo <dir> (--branch <name> [--new] | --pr <number>) [--relocate] [--no-tab]`
 
+`tern-wt create --issue <url|#n|n> [--repo <dir>] [--branch <name>] [--suggest] [--relocate] [--no-tab]`
+
 Makes the tern-managed worktree of a branch, or reuses it. Then opens its tab, or focuses the tab that is open. When the branch has an omp-owned worktree, `create` reuses that worktree where it is, with no `--relocate`. Reuse matches by branch: omp checks out pull request `<n>` on the branch `pr-<n>`. For `--pr <n>` of a pull request from the same repository, when no worktree has its head branch, `create` reuses omp's worktree on `pr-<n>` when the git config key `branch.pr-<n>.ompPrHeadRef` is not set or names the head branch. `branch` in the output is then `pr-<n>`.
 
 When the main checkout has the branch, also the head branch of `--pr`, `create` opens the main checkout where it is. `--relocate` does not apply: the main checkout does not move.
 
 When omp is installed and the omp setting `worktree.clone` is true in the repository, `create` makes the worktree with `omp worktree add`, also when `TERN_WT_HOME` is set. A rebuilt relocation uses plain git. The new worktree starts as a copy-on-write clone of the main checkout, so it has the ignored files of the main checkout, for example `.env` and `node_modules`. The clone also copies the `.git` file of each submodule, which then points to no git folder. `create` deletes each of these files, copies the submodule git folders of the main checkout into the git folder of the worktree, and runs `git submodule update`. Thus git works in each submodule, each submodule is at the recorded commit, and the files of the clone stay. A new branch gets the same upstream as plain `git worktree add -b` gives it, `origin/<default>` with the git defaults. Each line that omp prints to standard error, for example that the clone fell back to a checkout, becomes a warning that starts with `omp:`. When `omp config list --json` fails in the repository, `create` uses plain git and adds a warning that starts with `omp config list`. omp moves an invalid `.omp/config.yml` of the repository aside to `.omp/config.yml.broken-<id>` when it reads it.
 
-- `--repo`: a dir in the repository.
-- `--branch`: a local branch or a branch on `origin`. A name that git rejects gives `bad_args`.
+- `--repo`: a dir in the repository. Required for `--branch`, `--pr`, and short issue references (`#n` or `n`). An issue URL uses this checkout when its `origin` matches, otherwise the checkout at `<cloneRoot>/<owner>/<repo>`.
+- `--branch`: a local branch or a branch on `origin`. With `--issue`, overrides the derived name and needs no `--new`. A name that git rejects gives `bad_args`.
 - `--new`: make `--branch` a new branch from `origin/<default>`. When the branch is local or on `origin`, `--new` gives `bad_args`, also when the branch has a worktree.
 - `--pr`: the branch of a pull request. A pull request from a fork gets the branch `pr-<number>`. When the head branch of a pull request from the same repository is not local and not on `origin`, `--pr` gives `git_failed` with the fetch failure when the fetch of `origin` failed, else `bad_args`: `origin` does not have the branch, for example because it was deleted.
+- `--issue`: a GitHub issue URL, or `#n` or `n` with `--repo`. URLs can have a trailing path, query and fragment. A `/pull/<n>` URL uses the `--pr` flow. Without a matching checkout, `not_cloned` gives the clone `path` and the name with owner in `repo`. Ask the user before running `clone`, then retry.
+- `--suggest`: with an issue URL or short issue reference in `--issue`, return `{"branch", "issue": {"number", "url", "title"}, "repo", "warnings"}` without fetching or writing anything. It creates no branch, worktree or tab and writes no `ternIssue`. A `/pull/<n>` URL opens the PR flow directly. Use it without `--suggest`.
 - `--relocate`: move the worktree of the branch into the worktree root from a path that is not in the root. Pass it only after the user says yes. When git refuses the move, `create` makes the worktree again in the root with plain `git worktree add`. Of the work to lose in the first worktree, only a change, a new file that git does not track or a submodule commit not held by a remote branch or by the main checkout's committed submodule history stops it with `dirty_worktree`. Hard-to-rebuild files (see `remove`) do not stop it: `create` copies them into the new worktree.
 - `--no-tab`: skip the tab. `create` then types no setup commands: `setup.typed` is false, and the caller types `setup.line`.
 
+Issue branches start from `origin/<default>` and use `<prefix>/<number>-<slug>`. The prefix is `fix` when the issue type is `Bug` or a label matches `issueBranch.fixLabels`, ignoring uppercase and lowercase letters. Otherwise it is `feat`. The title slug drops a leading `[tag]` and issue-number references, applies NFKD and removes accent marks, changes letters to lowercase, drops quotes and apostrophes, replaces other runs of characters that do not match `[a-z0-9]` with `-`, and drops French and English stop words. It keeps the first five words, with a maximum of 40 characters on a word boundary. An empty slug gives `<prefix>/<number>`. An unrelated collision adds `-2`, `-3` and so on. The worktree folder replaces `/` with `-` as before.
+
+A local or `origin` branch that matches `^(fix|feat)/<n>(?:-|$)` is reused with its worktree. No second branch is created. This also applies to `<prefix>/<number>` with no slug. A closed issue adds a warning. Creation records `git config branch.<branch>.ternIssue <url>` and adds `issue: {number, url, title}` to the result for issue references, not `/pull/<n>` URLs. The default makes no GitHub writes. `issueBranch.linkOnGitHub: true` opts into `gh issue develop <n> --repo <owner>/<repo> --name <branch>` to create a remote branch linked in the issue's Development panel. It creates a branch, not a link for a branch from an earlier push. GitHub failures, for example conflicting branches, give `gh_failed`.
+
+For these related branch names only, the CLI first selects a branch with a `ternIssue` value that matches the issue URL exactly, then a branch with no issue association.
+
 For a new worktree, `create` opens the tab and waits a maximum of 30 s for its shell prompt. Then it types the setup commands of the repository into the tab (see [Options file](#options-file)). The commands run in the tab, and `create` does not wait for them to complete.
 
-Output: `{"path", "branch", "repo", "owner", "status", "carried", "setup", "tab", "warnings"}`.
+Output: `{"path", "branch", "repo", "owner", "status", "carried", "setup", "tab", "warnings"}`, plus `issue` for an issue.
 
 - `owner`: `tern` for a tern-managed worktree, `omp` for an omp-owned worktree, as in `list`, and `main` for the main checkout. A reused omp-owned worktree and the omp checkout of a pull request give `omp`.
 - `status`: `created`, `reused` or `relocated`. For an omp-owned worktree and for the main checkout, `reused` with its `path`.
 - `carried`: the ignored files, as paths in the worktree, that a rebuilt relocation copied into the new worktree. Empty otherwise. When the new worktree has a file at that path, the copy stays in the temporary folder, with a `not carried:` warning.
 - `setup`: `{"line", "typed"}`, or null. `line` holds the setup commands of the repository, with `&&` between them. `typed` is true when `create` typed the line into the tab it opened. `setup` is null unless `status` is `created`, `origin` is a GitHub URL, and the options file lists commands for its name with owner. When the tab was open before, no prompt shows in 30 s, or Tern fails, `typed` is false with a `setup not run:` warning, and the worktree stays.
 - `tab`: `{"session", "block", "opened"}`, or null with a `tab not opened:` warning. `opened` is false when `create` focused a tab that was open before.
+- `issue`: for an issue URL or short issue reference, `{"number", "url", "title"}` identifying the issue recorded in `ternIssue`. No `issue` field for `/pull/<n>` URLs, which use the PR flow.
+
+The Carly `create` export has the signature `(repo: string, branch: string?, new: boolean?, issue: string?)`. For issue work, pass the repository directory first and the issue URL fourth, with an optional branch override second. Keep `new` unset. The issue flow creates or reuses the branch.
 
 ### `remove`
 
@@ -102,7 +117,15 @@ Output: `{"repo", "name", "default", "branches", "prs": [{"number", "title", "br
 
 `tern-wt resolve <dir>...`
 
-Output: `{"repos": [{"dir", "root", "name", "owner"}]}`. `root`, `name` and `owner` are null for a dir that is not in a repository.
+Output: `{"repos": [{"dir", "root", "name", "owner", "origin"}]}`. `root`, `name`, `owner` and `origin` are null for a dir that is not in a repository. `origin` is the GitHub name with owner (`<owner>/<repo>`) in lowercase, or null when the repository has no GitHub origin.
+
+### `issue-ref`
+
+`tern-wt issue-ref -- <text>`
+
+Parse one issue or pull request URL, or a short issue reference (`#n` or `n`), without git or network access. Output: `{"ref": {"repo", "number", "kind"}}`, or `{"ref": null}` when the text is not a reference. `repo` is the name with owner (`<owner>/<repo>`) in lowercase, or null for a short reference. `number` is a string. `kind` is `issue` or `pr`. Pass exactly one text argument. A different number of arguments gives `bad_args`. The plugin uses this command to read prompt and clipboard text.
+
+Use the `--` separator to read clipboard text that starts with `-` as text.
 
 ### `repos`
 
@@ -126,7 +149,7 @@ Makes a GitHub repository with a README, then clones it. It checks the clone pat
 
 `tern-wt config`
 
-Output: the options file with each default filled in, `{"teardown", "cloneRoot", "hotkeys": {"new"}, "setup"}`. See [Options file](#options-file). An invalid file gives `config_invalid`, as for each command.
+Output: the options file with each default filled in, `{"teardown", "cloneRoot", "hotkeys": {"new"}, "issueBranch": {"fixLabels", "linkOnGitHub"}, "setup"}`. See [Options file](#options-file). An invalid file gives `config_invalid`, as for each command.
 
 ### `tern-wt setup`
 
@@ -141,6 +164,7 @@ Links `~/.local/bin/tern-wt` to the CLI and `~/.omp/agent/skills/tern-worktrees`
 | `bad_args`                  |                                                 | Fix the arguments from the message.                                                                                                                                                                                                                                                                                                                                                                           |
 | `config_invalid`            |                                                 | Show the user the message, which names the file and the key.                                                                                                                                                                                                                                                                                                                                                  |
 | `not_a_repo`                |                                                 | Pass a dir in a git repository.                                                                                                                                                                                                                                                                                                                                                                               |
+| `not_cloned`                | `path`, `repo`                                  | Show the clone path and ask before `tern-wt clone <owner>/<repo>`, then retry `create --issue`. The CLI does not clone silently.                                                                                                                                                                                                                                                                              |
 | `not_managed`               |                                                 | `remove` acts only on a tern-managed worktree, not on an omp-owned one. Get the paths from `list`.                                                                                                                                                                                                                                                                                                            |
 | `path_conflict`             | `path`                                          | Show the user `path`. Keep it as it is.                                                                                                                                                                                                                                                                                                                                                                       |
 | `worktree_exists_elsewhere` | `existing`, `target`                            | Ask the user, then run `create` again with `--relocate`.                                                                                                                                                                                                                                                                                                                                                      |
@@ -167,3 +191,7 @@ An invalid file makes each command fail with `config_invalid`. The keys:
 - `cloneRoot`: the dir for `clone` and `new-repo`, an absolute path or a path that starts with `~`. The default is `~/Developer`.
 - `hotkeys.new`: the Tern key chords that open the branch picker. The default is `["cmd+shift+w"]`. The picker uses the repository of the focused pane, else the session's first repository. When the session has no repository, it opens the repo picker. Clicking the worktree segment follows the same rule.
 - `setup`: the setup commands of each repository, for example `{"virtusize/aoyama": ["npm ci", "npm run build"]}`. The key is the name with owner of the repository. Uppercase and lowercase letters in the key are the same. The value is a list of shell commands without line breaks, and an empty list runs nothing. The default is `{}`. For a new worktree only, `create` and the Tern plugin type the commands of its repository into the new worktree tab as one line, with `&&` between them.
+- `issueBranch.fixLabels`: a list of labels that select `fix/` for issue branches, ignoring uppercase and lowercase letters. The default is `["bug", "fix", "regression", "hotfix"]`. With `[]`, only the issue type `Bug` selects `fix/`.
+- `issueBranch.linkOnGitHub`: a boolean, `false` by default. `true` opts into `gh issue develop` to create a remote branch linked to the issue on GitHub. The default records only the local `ternIssue` setting.
+
+In Tern, select `From issue…` in the branch picker or `New worktree from issue` in the palette (`plugin.tern-worktrees.from-issue`). The prompt starts from the clipboard when it holds an issue URL, then a second prompt lets the user edit the suggested branch. `New branch…` detects a pasted issue URL too. For a different repository, the plugin uses a matching open repository session or offers `Clone <owner>/<repo>`.

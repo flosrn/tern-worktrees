@@ -201,6 +201,9 @@ describe('create command', () => {
         mkdirSync(path.join(old, 'node_modules'));
         writeFileSync(path.join(old, 'node_modules', 'x.js'), 'x\n');
         const result = await run(['--repo', repo.dir, '--branch', 'feature/s', '--relocate', '--no-tab']);
+        if (!('carried' in result)) {
+          throw new Error('expected a created worktree, not a suggestion');
+        }
         const target = managedPath('feature-s');
         const read = (file: string): string => readFileSync(path.join(target, file), 'utf-8');
         expect({
@@ -350,7 +353,7 @@ describe('create command', () => {
 
       it('warns when the submodule update fails and keeps the worktree', async () => {
         const result = await run(['--repo', repo.dir, '--branch', 'feature/s', '--no-tab']);
-        expect(result.status).toBe('created');
+        expect(result).toMatchObject({ status: 'created' });
         expect(result.warnings).toHaveLength(1);
         expect(result.warnings[0]).toMatch(/^submodule update failed: .*transport 'file' not allowed.*\S$/su);
         await expect(headName(managedPath('feature-s'))).resolves.toBe('feature/s');
