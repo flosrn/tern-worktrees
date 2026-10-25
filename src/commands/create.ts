@@ -2,9 +2,9 @@ import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { loadConfig, setupCommands } from '../config.ts';
 import { chooseIssueBranch, readIssue, recordIssue, resolveIssue } from '../create-issue.ts';
 import type { CreatedIssue, IssueData, IssueInput, SuggestedIssue } from '../create-issue.ts';
+import { setupLine } from '../create-setup.ts';
 import { fetchOrigin, gitMust, gitRun, gitSucceeds, requireRepoRoot, updateSubmodules, worktrees } from '../git.ts';
 import type { Worktree } from '../git.ts';
 import { defaultBranch, ghMust, ghMustWith, readOrigin } from '../github.ts';
@@ -14,8 +14,10 @@ import { isUnder, worktreeOwner, worktreePath, worktreeRoot } from '../paths.ts'
 import type { WorktreeOwner, WorktreeRoot } from '../paths.ts';
 import { CliError } from '../proc.ts';
 import { nameWithOwner } from '../repo-ref.ts';
+import { ensureServices } from '../services.ts';
 import { blocksUnder, focus, ls, newSession, newTab, rename, sessionForRepo, typeInto, waitForPrompt } from '../tern.ts';
 import { guardWorkToLose } from '../work-to-lose.ts';
+import { loadWorktreeConfig } from '../worktree-config.ts';
 
 /** How `create` got the worktree. */
 export type CreateStatus = 'created' | 'relocated' | 'reused';
@@ -33,7 +35,7 @@ export interface CreatedTab {
 /**
  * The output of `create`. `carried` lists the ignored files that a relocation copied into the rebuilt worktree, and is empty otherwise.
  * `owner` is `tern` for a tern-managed worktree, `omp` for an omp-owned one and `main` for the main checkout.
- * `setup` holds the setup commands of a new worktree as one `line`. `typed` is true when `create` typed the line into the tab that it opened. `setup` is null for a reused or relocated worktree, and for a repository without setup commands.
+ * `setup` holds the environment activation and setup commands of a new worktree as one `line`. `typed` is true when `create` typed the line into the tab that it opened. `setup` is null for a reused or relocated worktree, and for a repository without environment variables or setup commands.
  */
 export interface CreateResult {
   branch: string;
@@ -437,13 +439,6 @@ const tryOpenTab = async (ctx: Context, placed: Placed): Promise<CreatedTab | nu
   }
 };
 
-/** The setup commands of the repository as one line, with ` && ` between them. Null unless the worktree is new and the options file lists commands for the name with owner of its GitHub origin. */
-const setupLine = (ctx: Context, status: CreateStatus): string | null => {
-  const repoRef = status === 'created' ? ctx.origin.github : null;
-  const commands = repoRef === null ? [] : setupCommands(loadConfig(), repoRef);
-  return commands.length === 0 ? null : commands.join(' && ');
-};
-
 /**
  * Types `line` into the tab that `create` opened when its shell shows the prompt. Gives true when it typed the line. Without a tab it adds no warning: the caller types the line.
  * A tab that was open before, no prompt in {@link SETUP_PROMPT_SECONDS} and a Tern failure each add a warning and keep the worktree.
@@ -529,8 +524,12 @@ export const run = async (args: string[]): Promise<CreateResult | SuggestedIssue
   if (issue !== null) {
     await recordIssue(root, placed.branch, issue.data.issue, issue.input.repo);
   }
+  const config = placed.status === 'created' ? loadWorktreeConfig(placed.path) : null;
+  if (config !== null && !options['no-tab']) {
+    await ensureServices(placed.path, config);
+  }
   const tab = options['no-tab'] ? null : await tryOpenTab(ctx, placed);
-  const line = setupLine(ctx, placed.status);
+  const line = setupLine(ctx.origin, config);
   const { status, ...location } = placed;
   const result: CreateResult = {
     ...location,

@@ -197,7 +197,7 @@ Each key in the file replaces its default:
 
 A branch is merged when it is an ancestor of `origin/<default>`, or when its tip is the head commit of a merged pull request or an ancestor of that commit.
 
-For a new worktree only, `tern-wt` types the commands of its repository into the new worktree tab as one line, with `&&` between them. The name with owner comes from the GitHub URL of `origin`, so a repository without a GitHub origin gets no setup commands. `tern-wt` waits a maximum of 30 s for the shell prompt of the tab before it types the line. When the tab was open before, no tab opens, the tab holds no new shell or no prompt shows, the commands do not run. A toast or a `create` warning shows why.
+For a new worktree only, `tern-wt` starts the declared services before opening the tab, then types the setup line into its shell. Repository setup commands from `.tern/worktree.json` run before user setup commands, with `&&` between them. When repository environment variables are set, the line starts with `eval "$(tern-wt env . --shell)"`. The name with owner for user setup comes from the GitHub URL of `origin`. Repository setup and environment variables also work without a GitHub origin. `tern-wt` waits a maximum of 30 s for the shell prompt before typing the line. When the tab was open before, no tab opens, the tab holds no new shell or no prompt shows, the line does not run. A toast or a `create` warning shows why. `--no-tab` starts no services and opens no tab. It returns the line for the caller to run.
 
 ```json
 {
@@ -220,11 +220,54 @@ A Tern key preset or a different plugin can bind the chord first. When `cmd+shif
 }
 ```
 
+## Prepare a repository environment
+
+Commit `.tern/worktree.json` at the checkout root to share setup commands, Docker services, environment variables and the memory allowance for heavy commands:
+
+```json
+{
+  "setup": ["npm ci"],
+  "services": {
+    "postgres": {
+      "image": "postgres:17",
+      "port": 5432,
+      "containerPort": 5432,
+      "env": { "POSTGRES_PASSWORD": "development" },
+      "tmpfs": "/var/lib/postgresql/data",
+      "memory": "1g",
+      "ready": ["pg_isready", "-U", "postgres"]
+    }
+  },
+  "env": { "DATABASE_URL": "postgres://postgres:development@localhost:5432/postgres", "BUILD_CACHE": "~/.cache/build" },
+  "heavy": { "slotMemoryGb": 7 }
+}
+```
+
+Each top-level key is optional. `setup` is an ordered array of shell commands without line breaks. `services` maps names to Docker declarations. Each service must have `image`, host `port` and `containerPort`. Optional fields are `env` (a string map), `args` (an array of arguments after the image), `tmpfs` and `memory` (strings passed to Docker), and `ready` (a command array run with `docker exec`). Services need a GitHub origin. All worktrees of that repository share the lowercase container name `tern-wt-<owner>-<repo>-<name>` and label `tern-wt.service=<owner>/<repo>/<name>`. Running containers are reused unchanged. Stopped containers are removed and started again from the declaration. A readiness command must succeed in 60 s.
+
+Top-level `env` values are literal strings. Only a leading `~/` expands to the home directory. `$VAR` and shell substitutions stay literal. These values apply to setup commands, heavy commands and the setup line of new worktree tabs. Service `env` values stay literal, also with `~/`. Missing settings default to empty setup, services and environment variables, and `heavy.slotMemoryGb: 7`. An invalid repository file gives `worktree_config_invalid`, naming the file and key in its message.
+
+```sh
+tern-wt prepare .                 # Start services, then run repository and user setup
+tern-wt prepare . --no-setup      # Start services without running setup commands
+tern-wt env .                    # Print {"env": {...}}
+eval "$(tern-wt env . --shell)"   # Apply POSIX-quoted exports to this shell
+tern-wt heavy -- npm run build   # Run with a host-wide heavy slot
+tern-wt heavy --status           # Inspect slots and host memory
+```
+
+`prepare <path>` runs setup sequentially in the checkout root, repository commands first and user commands second. It waits for setup to complete and returns `{"path", "repo", "services": [{"name", "container", "status"}], "setup": [{"command", "exitCode", "ms"}], "env", "warnings"}`. A service status is `started` or `running`. A failed setup command stops the sequence with `setup_failed`, its `command`, `exitCode` and the last 40 lines in `output`. `--no-setup` returns an empty `setup` array. Unlike `create`, `prepare` needs no Tern tab.
+
+`heavy [--repo <dir>] -- <command> [args...]` starts or reuses services and applies the repository environment, then runs the command in the current directory, even with `--repo`. It passes through standard output, standard error and the command's exit code, without a JSON result. Slots are shared across the host: `max(1, floor(total RAM in GiB / heavy.slotMemoryGb))`, with locks at `<plugin-data>/heavy/slot-<n>.lock`. Locks with dead process IDs are removed. When all slots are busy, it writes one waiting message to standard error and retries at 5 s intervals. The lock is released when the command ends or receives a signal. `heavy --status` returns `{"slots": [{"slot", "busy", "pid", "cwd", "command", "startedAt"}], "memAvailableGb", "memTotalGb"}`. Idle slots have null ownership fields. Memory values use GiB.
+
 ## The `tern-wt` CLI and the agent skill
 
 [`skills/tern-worktrees/SKILL.md`](skills/tern-worktrees/SKILL.md) is the reference for each command: its arguments, its output fields, the next step for each error code, and the rules agents follow for teardown. The commands:
 
-- `create`: makes or reuses the tern-managed worktree of a branch, an issue or a pull request, or reuses its omp-owned worktree or the main checkout, and opens its tab. Its `owner` field is `tern`, `omp` or `main`. For a new worktree, its `setup` field holds the setup commands. `create` types them into the tab that it opened.
+- `create`: makes or reuses the tern-managed worktree of a branch, an issue or a pull request, or reuses its omp-owned worktree or the main checkout, and opens its tab. Its `owner` field is `tern`, `omp` or `main`. For a new worktree, it starts or reuses services before opening the tab and types `setup.line`, which activates the environment and runs repository setup before user setup. `--no-tab` skips services and the tab but returns the line with `setup.typed: false`.
+- `prepare`: starts or reuses services and runs setup commands in the checkout root, without a Tern tab. `--no-setup` starts or reuses only services.
+- `env`: prints the declared repository environment as JSON, or POSIX-quoted exports with `--shell`.
+- `heavy`: runs a command with the repository environment and services in a host-wide slot, or reports slots and memory with `--status`.
 - `remove`: tears down a tern-managed worktree as the teardown policy says, and closes its tabs. Before removal it checks the target blocks for running processes. See the refusal and overrides below.
 - `list`: lists the tern-managed worktrees, each with its `owner` and its number of `changed` files. `--all` adds the omp-owned worktrees. When git cannot count the changes of a worktree, for example because a submodule has a broken `.git` file, `list` still shows that worktree and adds a warning.
 - `branches`: lists the branches, the open pull requests and the worktrees of a repository, with the owner of each worktree and `main` true for the main checkout. `--offline` reads only local refs, with no fetch and no pull requests.
@@ -236,7 +279,7 @@ A Tern key preset or a different plugin can bind the chord first. When `cmd+shif
 - `config`: prints the options file with each default filled in.
 - `setup`: links `~/.local/bin/tern-wt` and the skill to the package that it runs from. The plugin runs it each time it loads in a Tern window.
 
-Each command prints one JSON object. On failure it exits 1 with one of these error codes: `bad_args`, `config_invalid`, `not_a_repo`, `not_cloned`, `not_managed`, `path_conflict`, `worktree_exists_elsewhere`, `dirty_worktree`, `busy_tabs`, `git_failed`, `gh_failed`, `omp_failed`, `tern_failed`.
+Commands print one JSON object. Two commands use a different output: `env --shell` prints shell exports, and heavy command execution passes through the child process streams and exit code. CLI failures exit 1 with one of these error codes: `bad_args`, `config_invalid`, `worktree_config_invalid`, `setup_failed`, `service_failed`, `docker_missing`, `not_a_repo`, `not_cloned`, `not_managed`, `path_conflict`, `worktree_exists_elsewhere`, `dirty_worktree`, `busy_tabs`, `git_failed`, `gh_failed`, `omp_failed`, `tern_failed`. `service_failed` names the service and the failure in its message. `docker_missing` means the Docker executable is unavailable. See the skill for recovery steps.
 
 The plugin also gives Carly the exports `create`, `list` and `remove`, which run the CLI commands of the same names. For a new worktree with setup commands, the `create` export replies when the plugin typed them into the tab or gave up, at most 30 s after the tab opened, so `setup.typed` and `warnings` mean what they mean in the CLI output.
 

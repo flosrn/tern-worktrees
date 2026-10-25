@@ -4,6 +4,9 @@
 
 ### Feature
 
+- Add optional `.tern/worktree.json` declarations for repository setup commands, shared Docker services, literal environment variables and `heavy.slotMemoryGb`. Add `prepare <path> [--no-setup]` to start services and run repository setup before user setup. Add `env <path> [--shell]` to return the environment as JSON or POSIX-quoted exports
+- Add `heavy [--repo <dir>] -- <command>` with host-wide memory-sized slots, stale-PID lock recovery, signal cleanup and child output and exit-code passthrough. Add `heavy --status` for slot ownership and host memory
+- Prepare services before opening a new worktree tab. Prefix its setup line with `eval "$(tern-wt env . --shell)"` when environment variables are declared. Run repository setup before user setup. Keep `--no-tab` free of service and tab side effects while returning the setup line. Add `worktree_config_invalid`, `setup_failed`, `service_failed` and `docker_missing` errors
 - Add `create --issue <url|#n>` to derive or reuse an issue branch, record `branch.<branch>.ternIssue`, and open its worktree tab. Support `--branch` overrides, read-only `--suggest`, pull request URLs and `not_cloned` with the clone path. Add `issueBranch.fixLabels` and opt-in `issueBranch.linkOnGitHub` for remote branch creation with `gh issue develop`. Tell agents to use `--issue` for issue work and `Closes <owner>/<repo>#<n>` in PR bodies. Before, agents invented branch names and recorded issue links by hand
 - Add `From issue…` to the branch picker and `New worktree from issue` to the palette, with the command `plugin.tern-worktrees.from-issue`. Pre-fill an issue prompt from the clipboard, let the user edit the derived branch name, and detect issue URLs in `New branch…`. Use a matching open repository session or offer to clone the repository. Before, users had to select a repository and invent the branch name to start from an issue
 

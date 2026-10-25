@@ -6,6 +6,10 @@ import type { TernProcess } from './tern.ts';
 export type ErrorCode =
   | 'bad_args'
   | 'config_invalid'
+  | 'worktree_config_invalid'
+  | 'service_failed'
+  | 'docker_missing'
+  | 'setup_failed'
   | 'not_a_repo'
   | 'not_cloned'
   | 'not_managed'
@@ -27,7 +31,7 @@ export interface BusyBlock {
 }
 
 /** The added fields of the error envelope, for example the conflicting path or the changed files. */
-export type ErrorExtra = Record<string, string | string[] | BusyBlock[]>;
+export type ErrorExtra = Record<string, string | number | string[] | BusyBlock[]>;
 
 /** A failure that the CLI reports with a code, a message and added fields. */
 export class CliError extends Error {
@@ -85,4 +89,64 @@ export const must = async (argv: string[], code: ErrorCode, opts: RunOptions = {
     throw new CliError(code, result.stderr.trim() || `${argv[0]} exited ${result.status}`);
   }
   return result.stdout;
+};
+
+/** The signals that cancel a heavy command, in the order of their exit codes. */
+export const CANCEL_SIGNALS = ['SIGHUP', 'SIGINT', 'SIGTERM'] as const;
+/** A signal that cancels a heavy command. */
+export type CancelSignal = (typeof CANCEL_SIGNALS)[number];
+/** The shell exit code of a process that a cancel signal stopped: 128 plus the signal number. */
+export const CANCEL_EXIT_CODES: Readonly<Record<CancelSignal, number>> = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 };
+
+const isCancelSignal = (signal: NodeJS.Signals | null): signal is CancelSignal => signal === 'SIGHUP' || signal === 'SIGINT' || signal === 'SIGTERM';
+
+/** The signal an aborted run forwards: SIGINT or SIGHUP when the abort names it, else SIGTERM. */
+const abortSignalOf = (signal: AbortSignal): CancelSignal => {
+  const reason: unknown = signal.reason;
+  if (reason === 'SIGINT') {
+    return 'SIGINT';
+  }
+  if (reason === 'SIGHUP') {
+    return 'SIGHUP';
+  }
+  return 'SIGTERM';
+};
+
+/** Runs a command with the caller's terminal and forwards cancellation to the child. */
+export const runInherited = async (
+  argv: string[],
+  opts: RunOptions & { onSignal?: (forward: (signal: NodeJS.Signals) => void) => void; signal?: AbortSignal } = {},
+): Promise<number> => {
+  if (opts.signal?.aborted === true) {
+    return CANCEL_EXIT_CODES[abortSignalOf(opts.signal)];
+  }
+  const [command, ...args] = argv;
+  const child = spawn(command, args, { cwd: opts.cwd, detached: true, env: { ...process.env, ...opts.env }, stdio: 'inherit' });
+  const forward = (signal: NodeJS.Signals): void => {
+    if (child.pid === undefined) {
+      return;
+    }
+    try {
+      process.kill(-child.pid, signal);
+    } catch {
+      // The group can finish between cancellation and delivery of the signal.
+    }
+  };
+  const onAbort = function onAbort(this: AbortSignal): void {
+    forward(abortSignalOf(this));
+  };
+  opts.signal?.addEventListener('abort', onAbort);
+  opts.onSignal?.(forward);
+  try {
+    await once(child, 'close');
+  } catch (error) {
+    process.stderr.write(`${String(error)}\n`);
+    return 127;
+  } finally {
+    opts.signal?.removeEventListener('abort', onAbort);
+  }
+  if (child.exitCode !== null) {
+    return child.exitCode;
+  }
+  return isCancelSignal(child.signalCode) ? CANCEL_EXIT_CODES[child.signalCode] : 1;
 };
