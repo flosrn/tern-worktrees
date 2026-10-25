@@ -6,6 +6,10 @@ import type { TernProcess } from './tern.ts';
 export type ErrorCode =
   | 'bad_args'
   | 'config_invalid'
+  | 'worktree_config_invalid'
+  | 'service_failed'
+  | 'docker_missing'
+  | 'setup_failed'
   | 'not_a_repo'
   | 'not_cloned'
   | 'not_managed'
@@ -27,7 +31,7 @@ export interface BusyBlock {
 }
 
 /** The added fields of the error envelope, for example the conflicting path or the changed files. */
-export type ErrorExtra = Record<string, string | string[] | BusyBlock[]>;
+export type ErrorExtra = Record<string, string | number | string[] | BusyBlock[]>;
 
 /** A failure that the CLI reports with a code, a message and added fields. */
 export class CliError extends Error {
@@ -85,4 +89,39 @@ export const must = async (argv: string[], code: ErrorCode, opts: RunOptions = {
     throw new CliError(code, result.stderr.trim() || `${argv[0]} exited ${result.status}`);
   }
   return result.stdout;
+};
+
+/** Runs a command with the caller's terminal and forwards cancellation to the child. */
+export const runInherited = async (argv: string[], opts: RunOptions & { signal?: AbortSignal } = {}): Promise<number> => {
+  if (opts.signal?.aborted === true) {
+    return opts.signal.reason === 'SIGINT' ? 130 : 143;
+  }
+  const [command, ...args] = argv;
+  const child = spawn(command, args, { cwd: opts.cwd, detached: true, env: { ...process.env, ...opts.env }, stdio: 'inherit' });
+  const abort = (): void => {
+    if (child.pid === undefined) {
+      return;
+    }
+    try {
+      process.kill(-child.pid, opts.signal?.reason === 'SIGINT' ? 'SIGINT' : 'SIGTERM');
+    } catch {
+      // The group can finish between cancellation and delivery of the signal.
+    }
+  };
+  opts.signal?.addEventListener('abort', abort, { once: true });
+  try {
+    await once(child, 'close');
+  } catch (error) {
+    process.stderr.write(`${String(error)}\n`);
+    return 127;
+  } finally {
+    opts.signal?.removeEventListener('abort', abort);
+  }
+  if (child.exitCode !== null) {
+    return child.exitCode;
+  }
+  if (child.signalCode === 'SIGINT') {
+    return 130;
+  }
+  return child.signalCode === 'SIGTERM' ? 143 : 1;
 };

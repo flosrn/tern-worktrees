@@ -1,9 +1,10 @@
+import { CliOutput } from './cli-output.ts';
 import { loadConfig } from './config.ts';
 import { CliError } from './proc.ts';
 
 /** What the process prints and how it exits. */
 export interface CliResult {
-  code: 0 | 1;
+  code: number;
   stdout: string;
   stderr: string;
 }
@@ -63,6 +64,9 @@ export const main = async (argv: string[], load: CommandLoader = loadCommand): P
     loadConfig();
     const command = await load(name);
     const result = await command.run(args);
+    if (result instanceof CliOutput) {
+      return { code: result.exitCode, stderr: '', stdout: result.output };
+    }
     return { code: 0, stderr: '', stdout: `${JSON.stringify(result)}\n` };
   } catch (error) {
     const failure = toCliError(error);
