@@ -3,7 +3,7 @@ import { CliOutput } from '../cli-output.ts';
 import { worktreeRoot } from '../environment.ts';
 import { acquireHeavySlot, heavyStatus } from '../heavy.ts';
 import type { HeavyStatus } from '../heavy.ts';
-import { CliError, runInherited } from '../proc.ts';
+import { CANCEL_EXIT_CODES, CANCEL_SIGNALS, CliError, runInherited } from '../proc.ts';
 import { ensureServices } from '../services.ts';
 import { loadWorktreeConfig } from '../worktree-config.ts';
 
@@ -27,29 +27,34 @@ export const run = async (args: string[]): Promise<HeavyStatus | CliOutput> => {
     return heavyStatus(config.heavy);
   }
   const cancellation = new AbortController();
-  let cancellationCode = 130;
+  let cancellationCode = CANCEL_EXIT_CODES.SIGINT;
+  let forward: ((signal: NodeJS.Signals) => void) | undefined;
   let release: (() => void) | undefined;
-  const cancel = (signal: 'SIGINT' | 'SIGTERM'): void => {
-    cancellation.abort(signal);
-  };
-  const onInterrupt = (): void => {
-    cancel('SIGINT');
-  };
-  const onTerminate = (): void => {
-    cancellationCode = 143;
-    cancel('SIGTERM');
-  };
+  const listeners = CANCEL_SIGNALS.map(signal => {
+    const listener = (): void => {
+      cancellationCode = CANCEL_EXIT_CODES[signal];
+      cancellation.abort(signal);
+      forward?.(signal);
+    };
+    process.on(signal, listener);
+    return [signal, listener] as const;
+  });
   const cleanup = (): void => {
     release?.();
   };
   process.once('exit', cleanup);
-  process.once('SIGINT', onInterrupt);
-  process.once('SIGTERM', onTerminate);
   try {
-    await ensureServices(root, config);
+    await ensureServices(root, config, cancellation.signal);
     release = await acquireHeavySlot(command, { ...config.heavy, signal: cancellation.signal });
-    const exitCode = await runInherited(command, { cwd: process.cwd(), env: config.env, signal: cancellation.signal });
-    return new CliOutput(exitCode);
+    const exitCode = await runInherited(command, {
+      cwd: process.cwd(),
+      env: config.env,
+      onSignal: forwardToChild => {
+        forward = forwardToChild;
+      },
+      signal: cancellation.signal,
+    });
+    return new CliOutput(cancellation.signal.reason === 'SIGHUP' ? CANCEL_EXIT_CODES.SIGHUP : exitCode);
   } catch (error) {
     if (cancellation.signal.aborted) {
       return new CliOutput(cancellationCode);
@@ -57,8 +62,9 @@ export const run = async (args: string[]): Promise<HeavyStatus | CliOutput> => {
     throw error;
   } finally {
     release?.();
-    process.removeListener('SIGINT', onInterrupt);
-    process.removeListener('SIGTERM', onTerminate);
+    for (const [signal, listener] of listeners) {
+      process.removeListener(signal, listener);
+    }
     process.removeListener('exit', cleanup);
   }
 };

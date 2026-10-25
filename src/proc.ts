@@ -91,37 +91,62 @@ export const must = async (argv: string[], code: ErrorCode, opts: RunOptions = {
   return result.stdout;
 };
 
+/** The signals that cancel a heavy command, in the order of their exit codes. */
+export const CANCEL_SIGNALS = ['SIGHUP', 'SIGINT', 'SIGTERM'] as const;
+/** A signal that cancels a heavy command. */
+export type CancelSignal = (typeof CANCEL_SIGNALS)[number];
+/** The shell exit code of a process that a cancel signal stopped: 128 plus the signal number. */
+export const CANCEL_EXIT_CODES: Readonly<Record<CancelSignal, number>> = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 };
+
+const isCancelSignal = (signal: NodeJS.Signals | null): signal is CancelSignal => signal === 'SIGHUP' || signal === 'SIGINT' || signal === 'SIGTERM';
+
+/** The signal an aborted run forwards: SIGINT or SIGHUP when the abort names it, else SIGTERM. */
+const abortSignalOf = (signal: AbortSignal | undefined): CancelSignal => {
+  const reason: unknown = signal?.reason;
+  if (reason === 'SIGINT') {
+    return 'SIGINT';
+  }
+  if (reason === 'SIGHUP') {
+    return 'SIGHUP';
+  }
+  return 'SIGTERM';
+};
+
 /** Runs a command with the caller's terminal and forwards cancellation to the child. */
-export const runInherited = async (argv: string[], opts: RunOptions & { signal?: AbortSignal } = {}): Promise<number> => {
+export const runInherited = async (
+  argv: string[],
+  opts: RunOptions & { onSignal?: (forward: (signal: NodeJS.Signals) => void) => void; signal?: AbortSignal } = {},
+): Promise<number> => {
   if (opts.signal?.aborted === true) {
-    return opts.signal.reason === 'SIGINT' ? 130 : 143;
+    return CANCEL_EXIT_CODES[abortSignalOf(opts.signal)];
   }
   const [command, ...args] = argv;
   const child = spawn(command, args, { cwd: opts.cwd, detached: true, env: { ...process.env, ...opts.env }, stdio: 'inherit' });
-  const abort = (): void => {
+  const forward = (signal: NodeJS.Signals): void => {
     if (child.pid === undefined) {
       return;
     }
     try {
-      process.kill(-child.pid, opts.signal?.reason === 'SIGINT' ? 'SIGINT' : 'SIGTERM');
+      process.kill(-child.pid, signal);
     } catch {
       // The group can finish between cancellation and delivery of the signal.
     }
   };
-  opts.signal?.addEventListener('abort', abort, { once: true });
+  const onAbort = (): void => {
+    forward(abortSignalOf(opts.signal));
+  };
+  opts.signal?.addEventListener('abort', onAbort);
+  opts.onSignal?.(forward);
   try {
     await once(child, 'close');
   } catch (error) {
     process.stderr.write(`${String(error)}\n`);
     return 127;
   } finally {
-    opts.signal?.removeEventListener('abort', abort);
+    opts.signal?.removeEventListener('abort', onAbort);
   }
   if (child.exitCode !== null) {
     return child.exitCode;
   }
-  if (child.signalCode === 'SIGINT') {
-    return 130;
-  }
-  return child.signalCode === 'SIGTERM' ? 143 : 1;
+  return isCancelSignal(child.signalCode) ? CANCEL_EXIT_CODES[child.signalCode] : 1;
 };

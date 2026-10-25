@@ -12,6 +12,8 @@ interface DockerState {
   failStatus?: number;
   silent?: boolean;
   readyFailures?: number;
+  concurrentStart?: boolean;
+  conflictDelay?: number;
 }
 
 let root = '';
@@ -47,10 +49,12 @@ let stdout = '';
 let stderr = '';
 if (state.fail === args[0]) {
   status = state.failStatus ?? 1;
-  stderr = state.silent ? '' : 'injected ' + args[0] + ' failure';
+  stderr = state.silent ? '' : state.concurrentStart ? 'Conflict. The container name ' + args[args.indexOf('--name') + 1] + ' is already in use' : 'injected ' + args[0] + ' failure';
+  if (args[0] === 'run' && state.concurrentStart && !state.winnerVanishes) state.conflictDelay = 1;
 } else if (args[0] === 'inspect') {
   const name = args.at(-1);
   if (Object.hasOwn(state.containers, name)) stdout = String(state.containers[name]);
+  else if (state.conflictDelay) { state.conflictDelay--; stdout = 'false'; if (!state.conflictDelay) state.containers[name] = true; }
   else { status = 1; stderr = 'Error: No such object: ' + name; }
 } else if (args[0] === 'rm') {
   delete state.containers[args.at(-1)];
@@ -186,7 +190,9 @@ process.exitCode = status;
       await expect(preparation).rejects.toThrow('60 seconds');
       expect(state().calls.filter(call => call[0] === 'exec')).toHaveLength(1);
     });
+  });
 
+  describe('service failures', () => {
     it('reports docker_missing without attempting a start when Docker is absent', async () => {
       rmSync(path.join(bin, 'docker'));
       await expect(ensureServices(root, config)).rejects.toMatchObject({ code: 'docker_missing' });
@@ -196,13 +202,16 @@ process.exitCode = status;
     it.each(['info', 'inspect', 'rm', 'run'])('reports service_failed for a Docker %s failure without continuing', async command => {
       writeFileSync(stateFile, JSON.stringify({ calls: [], containers: { 'tern-wt-myowner-myrepo-db': false }, fail: command }));
       await expect(ensureServices(root, config)).rejects.toMatchObject({ code: 'service_failed', extra: { service: 'DB' }, message: `injected ${command} failure` });
-      expect(state().calls.at(-1)?.[0]).toBe(command);
+      expect(state().calls.filter(call => call[0] === command)).toHaveLength(1);
     });
 
-    it.each(['info', 'inspect', 'exec'])('reports docker_missing when Docker disappears during %s', async command => {
+    it.each(['info', 'inspect', 'exec', 'run'])('classifies Docker exit 127 from %s', async command => {
       writeFileSync(stateFile, JSON.stringify({ calls: [], containers: {}, fail: command, failStatus: 127 }));
       const configured = { ...config, services: { DB: { ...config.services.DB, ready: ['check'] } } };
-      await expect(ensureServices(root, configured)).rejects.toMatchObject({ code: 'docker_missing', message: `injected ${command} failure` });
+      await expect(ensureServices(root, configured)).rejects.toMatchObject({
+        code: command === 'info' ? 'docker_missing' : 'service_failed',
+        message: `injected ${command} failure`,
+      });
     });
 
     it.each([
@@ -218,12 +227,48 @@ process.exitCode = status;
       await expect(preparation).rejects.toThrow(message);
     });
 
-    it.each(['inspect', 'exec'])('reports missing Docker without stderr during %s', async command => {
+    it.each([
+      ['inspect', 'tern-wt-myowner-myrepo-db: docker inspect failed'],
+      ['exec', 'tern-wt-myowner-myrepo-db: readiness command exited 127'],
+    ])('reports container failure without stderr during %s', async (command, message) => {
       writeFileSync(stateFile, JSON.stringify({ calls: [], containers: {}, fail: command, failStatus: 127, silent: true }));
       await expect(ensureServices(root, { ...config, services: { DB: { ...config.services.DB, ready: ['check'] } } })).rejects.toMatchObject({
-        code: 'docker_missing',
-        message: 'docker is not installed',
+        code: 'service_failed',
+        message,
       });
+    });
+
+    it('reuses the container when another prepare wins the creation race', async () => {
+      writeFileSync(stateFile, JSON.stringify({ calls: [], concurrentStart: true, containers: {}, fail: 'run' }));
+      await expect(ensureServices(root, config)).resolves.toStrictEqual([{ container: 'tern-wt-myowner-myrepo-db', name: 'DB', status: 'running' }]);
+      expect(state().calls.map(call => call[0])).toStrictEqual(['info', 'inspect', 'run', 'inspect', 'inspect']);
+    });
+
+    it('reports the name conflict when the other prepare never starts its container within sixty seconds', async () => {
+      writeFileSync(stateFile, JSON.stringify({ calls: [], concurrentStart: true, containers: {}, fail: 'run', winnerVanishes: true }));
+      vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValue(60_000);
+      await expect(ensureServices(root, config)).rejects.toThrow('is already in use');
+      expect(state().calls.map(call => call[0])).toStrictEqual(['info', 'inspect', 'run', 'inspect']);
+    });
+
+    it('stops waiting for the other prepare once cancellation has arrived', async () => {
+      writeFileSync(stateFile, JSON.stringify({ calls: [], concurrentStart: true, containers: {}, fail: 'run', winnerVanishes: true }));
+      const cancellation = new AbortController();
+      const pending = ensureServices(root, config, cancellation.signal);
+      await vi.waitFor(
+        () => {
+          expect(state().calls.filter(call => call[0] === 'inspect')).toHaveLength(2);
+        },
+        { timeout: 10_000 },
+      );
+      cancellation.abort('SIGINT');
+      await expect(pending).rejects.toThrow('is already in use');
+    });
+
+    it('preserves a generic run failure without polling for another prepare', async () => {
+      writeFileSync(stateFile, JSON.stringify({ calls: [], concurrentStart: false, containers: {}, fail: 'run' }));
+      await expect(ensureServices(root, config)).rejects.toMatchObject({ code: 'service_failed', message: 'injected run failure' });
+      expect(state().calls.map(call => call[0])).toStrictEqual(['info', 'inspect', 'run']);
     });
 
     it('attributes a failure in a later service to that service', async () => {
@@ -238,6 +283,22 @@ process.exitCode = status;
       writeFileSync(path.join(bin, 'git'), '#!/bin/sh\nprintf "%s\\n" "https://example.com/owner/repo.git"\n', { mode: 0o755 });
       await expect(ensureServices(root, config)).rejects.toMatchObject({ code: 'service_failed', extra: { service: 'DB' } });
       expect(state().calls).toStrictEqual([]);
+    });
+  });
+
+  describe('service cancellation', () => {
+    it('stops readiness polling when cancellation arrives', async () => {
+      writeFileSync(stateFile, JSON.stringify({ calls: [], containers: {}, readyFailures: 100 }));
+      const cancellation = new AbortController();
+      const pending = ensureServices(root, { ...config, services: { DB: { ...config.services.DB, ready: ['check'] } } }, cancellation.signal);
+      await vi.waitFor(
+        () => {
+          expect(state().calls.some(call => call[0] === 'exec')).toBeTruthy();
+        },
+        { timeout: 10_000 },
+      );
+      cancellation.abort('SIGINT');
+      await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     });
   });
 });

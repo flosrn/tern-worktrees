@@ -50,12 +50,12 @@ const alive = (pid: number): boolean => {
   }
 };
 
-const readOwner = (file: string): HeavyOwner | null => {
+const parseOwner = (bytes: string): HeavyOwner | null => {
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(file, 'utf-8'));
+    raw = JSON.parse(bytes);
   } catch (error) {
-    if (error instanceof SyntaxError || (error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+    if (error instanceof SyntaxError) {
       return null;
     }
     throw error;
@@ -78,6 +78,17 @@ const readOwner = (file: string): HeavyOwner | null => {
   return { command: fields.command, cwd: fields.cwd, pid: fields.pid, startedAt: fields.startedAt };
 };
 
+const readOwner = (file: string): HeavyOwner | null => {
+  try {
+    return parseOwner(readFileSync(file, 'utf-8'));
+  } catch (error) {
+    if (hasCode(error, 'ENOENT')) {
+      return null;
+    }
+    throw error;
+  }
+};
+
 /** Reads slot ownership without changing live or stale locks. */
 export const heavyStatus = (options: HeavyOptions = {}): HeavyStatus => ({
   memAvailableGb: freemem() / GIB,
@@ -89,7 +100,7 @@ export const heavyStatus = (options: HeavyOptions = {}): HeavyStatus => ({
   }),
 });
 
-const releaseOwnedSlot = (file: string, inode: number): (() => void) => {
+const releaseOwnedSlot = (file: string, inode: number, bytes: string): (() => void) => {
   let released = false;
   return () => {
     if (released) {
@@ -97,7 +108,7 @@ const releaseOwnedSlot = (file: string, inode: number): (() => void) => {
     }
     released = true;
     try {
-      if (statSync(file).ino === inode) {
+      if (statSync(file).ino === inode && readFileSync(file, 'utf-8') === bytes) {
         unlinkSync(file);
       }
     } catch (error) {
@@ -110,11 +121,12 @@ const releaseOwnedSlot = (file: string, inode: number): (() => void) => {
 
 const tryAcquireSlot = (file: string, owner: HeavyOwner): (() => void) | null => {
   const staging = path.join(pluginData(), 'heavy', `owner-${process.pid}-${randomUUID()}`);
-  writeFileSync(staging, JSON.stringify(owner), { flag: 'wx', mode: 0o600 });
+  const bytes = JSON.stringify(owner);
+  writeFileSync(staging, bytes, { flag: 'wx', mode: 0o600 });
   try {
     // Publish complete ownership bytes with exclusive creation of the lock name.
     linkSync(staging, file);
-    return releaseOwnedSlot(file, statSync(file).ino);
+    return releaseOwnedSlot(file, statSync(file).ino, bytes);
   } catch (error) {
     if (!hasCode(error, 'EEXIST')) {
       throw error;
@@ -126,11 +138,19 @@ const tryAcquireSlot = (file: string, owner: HeavyOwner): (() => void) | null =>
 };
 
 const reclaimDeadSlot = (file: string, claimant: HeavyOwner): boolean => {
-  const owner = readOwner(file);
-  if (owner === null || alive(owner.pid)) {
+  let bytes: string;
+  try {
+    bytes = readFileSync(file, 'utf-8');
+  } catch (error) {
+    if (hasCode(error, 'ENOENT')) {
+      return true;
+    }
+    throw error;
+  }
+  const owner = parseOwner(bytes);
+  if (owner !== null && alive(owner.pid)) {
     return false;
   }
-  const bytes = JSON.stringify(owner);
   const key = createHash('sha256').update(`${file}:${bytes}`).digest('hex');
   const claim = path.join(pluginData(), 'heavy', `reclaim-${key}.lock`);
   let release = tryAcquireSlot(claim, claimant);
@@ -142,7 +162,7 @@ const reclaimDeadSlot = (file: string, claimant: HeavyOwner): boolean => {
   }
   try {
     // Only the exclusive claimant can remove this dead owner's slot.
-    if (JSON.stringify(readOwner(file)) === bytes) {
+    if (readFileSync(file, 'utf-8') === bytes) {
       unlinkSync(file);
     }
     return true;

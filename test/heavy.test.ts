@@ -111,17 +111,22 @@ describe('host-wide heavy slots', () => {
     '{"pid":1,"cwd":"/","startedAt":"now","command":2}',
     '{"pid":1,"cwd":"/","startedAt":"now","command":[2]}',
     'not json',
-  ])('treats invalid lock metadata as unowned: %s', bytes => {
+  ])('replaces invalid lock metadata before running a new owner: %s', async bytes => {
     const directory = path.join(process.env.TERN_PLUGIN_DATA ?? '', 'heavy');
     mkdirSync(directory, { recursive: true });
     writeFileSync(path.join(directory, 'slot-1.lock'), bytes);
     expect(heavyStatus({ totalBytes: GIB }).slots[0]).toMatchObject({ busy: false });
+    const release = await acquireHeavySlot(['replacement'], { totalBytes: GIB });
+    try {
+      expect(heavyStatus({ totalBytes: GIB }).slots[0]).toMatchObject({ busy: true, command: ['replacement'] });
+    } finally {
+      release();
+    }
   });
 
   it('does not remove a replacement lock when an earlier owner releases', async () => {
     const release = await acquireHeavySlot(['old'], { totalBytes: GIB });
     const file = path.join(process.env.TERN_PLUGIN_DATA ?? '', 'heavy', 'slot-1.lock');
-    unlinkSync(file);
     writeFileSync(file, JSON.stringify({ command: ['replacement'], cwd: '/', pid: process.pid, startedAt: 'now' }));
     release();
     expect(heavyStatus({ totalBytes: GIB }).slots[0]).toMatchObject({ busy: true, command: ['replacement'] });
@@ -204,7 +209,11 @@ describe('heavy command', () => {
     await expect(run(['--status', '--', 'echo'])).rejects.toMatchObject({ code: 'bad_args' });
   });
 
-  it.each(['SIGINT', 'SIGTERM'] as const)('forwards %s and releases the slot after the child stops', async signal => {
+  it.each([
+    { code: 130, signal: 'SIGINT' },
+    { code: 143, signal: 'SIGTERM' },
+    { code: 129, signal: 'SIGHUP' },
+  ] as const)('forwards $signal and releases the slot after the child stops', async ({ signal, code }) => {
     const repo = await tmpRepo();
     const ready = path.join(tempDir('heavy-ready'), 'ready');
     const script = "require('node:fs').writeFileSync(process.argv[1], 'ready'); setInterval(() => {}, 1000)";
@@ -215,7 +224,8 @@ describe('heavy command', () => {
       await delay(10);
     }
     process.emit(signal);
-    await expect(execution).resolves.toStrictEqual(new CliOutput(signal === 'SIGINT' ? 130 : 143));
+    process.emit(signal);
+    await expect(execution).resolves.toStrictEqual(new CliOutput(code));
     expect(heavyStatus().slots.every(slot => !slot.busy)).toBeTruthy();
   });
 
@@ -231,7 +241,11 @@ describe('heavy command', () => {
     expect(existsSync(output)).toBeFalsy();
   });
 
-  it.each(['SIGINT', 'SIGTERM'] as const)('cancels a waiting command on %s without releasing another owner', async signal => {
+  it.each([
+    { code: 130, signal: 'SIGINT' },
+    { code: 143, signal: 'SIGTERM' },
+    { code: 129, signal: 'SIGHUP' },
+  ] as const)('cancels a waiting command on $signal without releasing another owner', async ({ signal, code }) => {
     const repo = await tmpRepo();
     mkdirSync(path.join(repo.dir, '.tern'));
     writeFileSync(path.join(repo.dir, '.tern', 'worktree.json'), JSON.stringify({ heavy: { slotMemoryGb: 1_000_000 } }));
@@ -243,7 +257,7 @@ describe('heavy command', () => {
         expect(stderr).toHaveBeenCalledWith('tern-wt: all 1 heavy slots are busy; waiting\n');
       });
       process.emit(signal);
-      await expect(execution).resolves.toStrictEqual(new CliOutput(signal === 'SIGINT' ? 130 : 143));
+      await expect(execution).resolves.toStrictEqual(new CliOutput(code));
       expect(heavyStatus({ totalBytes: GIB }).slots[0]).toMatchObject({ busy: true, command: ['occupied'] });
     } finally {
       release();
@@ -289,6 +303,28 @@ describe('inherited command execution', () => {
     cancellation.abort(signal);
     await expect(execution).resolves.toBe(signal === 'SIGINT' ? 130 : 143);
     await delay(1200);
+    expect(existsSync(output)).toBeFalsy();
+  });
+
+  it.each([
+    ['SIGINT', 130],
+    ['SIGTERM', 143],
+    ['SIGHUP', 129],
+  ] as const)('forwards a %s that arrives twice to the child group', async (signal, exitCode) => {
+    const output = path.join(tempDir('heavy-repeat'), signal);
+    const ready = `${output}.ready`;
+    const cancellation = new AbortController();
+    const script = "require('node:fs').writeFileSync(process.argv[1], 'ready'); setInterval(() => {},1000)";
+    const execution = runInherited([process.execPath, '-e', script, ready], { signal: cancellation.signal });
+    while (!existsSync(ready)) {
+      // Wait for real process readiness before sending the signals.
+      // oxlint-disable-next-line no-await-in-loop
+      await delay(10);
+    }
+    process.emit(signal);
+    process.emit(signal);
+    cancellation.abort(signal);
+    await expect(execution).resolves.toBe(exitCode);
     expect(existsSync(output)).toBeFalsy();
   });
 

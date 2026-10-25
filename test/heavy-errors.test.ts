@@ -107,4 +107,54 @@ describe('heavy operating-system failures', () => {
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     expect(heavyStatus({ totalBytes: GIB }).slots[0]).toMatchObject({ busy: true, command: ['replacement'] });
   });
+
+  it('keeps a slot when raw ownership disappears before exclusive recovery', async () => {
+    const directory = path.join(process.env.TERN_PLUGIN_DATA ?? '', 'heavy');
+    fs.mkdirSync(directory, { recursive: true });
+    const file = path.join(directory, 'slot-1.lock');
+    fs.writeFileSync(file, 'invalid metadata');
+    const actual = await vi.importActual<typeof fs>('node:fs');
+    vi.mocked(fs.readFileSync).mockImplementationOnce((target, options) => {
+      if (String(target) === file) {
+        actual.unlinkSync(file);
+        throw Object.assign(new Error('raw ownership disappeared'), { code: 'ENOENT' });
+      }
+      return actual.readFileSync(target, options);
+    });
+    const release = await acquireHeavySlot(['replacement'], { totalBytes: GIB });
+    try {
+      expect(heavyStatus({ totalBytes: GIB }).slots[0]).toMatchObject({ busy: true, command: ['replacement'] });
+    } finally {
+      release();
+    }
+  });
+
+  it('propagates malformed ownership bytes that are not JSON syntax errors', () => {
+    const directory = path.join(process.env.TERN_PLUGIN_DATA ?? '', 'heavy');
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, 'slot-1.lock'), 'invalid metadata');
+    const parse = vi.spyOn(JSON, 'parse').mockImplementation(() => {
+      throw new TypeError('malformed ownership');
+    });
+    try {
+      expect(() => heavyStatus({ totalBytes: GIB })).toThrow('malformed ownership');
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
+  it('propagates denied access while reading raw stale ownership', async () => {
+    const directory = path.join(process.env.TERN_PLUGIN_DATA ?? '', 'heavy');
+    fs.mkdirSync(directory, { recursive: true });
+    const file = path.join(directory, 'slot-1.lock');
+    fs.writeFileSync(file, 'invalid metadata');
+    const actual = await vi.importActual<typeof fs>('node:fs');
+    vi.mocked(fs.readFileSync).mockImplementation((target, options) => {
+      if (String(target) === file) {
+        throw Object.assign(new Error('raw ownership read failed'), { code: 'EACCES' });
+      }
+      return actual.readFileSync(target, options);
+    });
+    await expect(acquireHeavySlot(['replacement'], { totalBytes: GIB })).rejects.toThrow('raw ownership read failed');
+  });
 });
