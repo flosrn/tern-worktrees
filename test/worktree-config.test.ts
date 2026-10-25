@@ -8,6 +8,18 @@ import { tempDir, useSandbox } from './helpers.ts';
 let root = '';
 let file = '';
 
+const thrown = (): CliError => {
+  try {
+    loadWorktreeConfig(root);
+  } catch (error) {
+    if (!(error instanceof CliError)) {
+      throw error;
+    }
+    return error;
+  }
+  throw new Error('loadWorktreeConfig did not throw');
+};
+
 describe('repository configuration', () => {
   beforeEach(() => {
     useSandbox();
@@ -66,87 +78,94 @@ describe('repository configuration', () => {
     });
 
     it.each([
-      [null, '(root)'],
-      [[], '(root)'],
-      [{ unknown: true }, 'unknown'],
-      [{ setup: 'vp install' }, 'setup'],
-      [{ setup: [1] }, 'setup'],
-      [{ setup: [''] }, 'setup'],
-      [{ setup: ['   '] }, 'setup'],
-      [{ setup: ['echo a\necho b'] }, 'setup'],
-      [{ setup: ['echo a\recho b'] }, 'setup'],
-      [{ env: [] }, 'env'],
-      [{ env: { X: 1 } }, 'env.X'],
-      [{ env: { 'BAD-NAME': 'x' } }, 'env.BAD-NAME'],
-      [{ heavy: null }, 'heavy'],
-      [{ heavy: [] }, 'heavy'],
-      [{ heavy: { other: 3 } }, 'heavy.other'],
-      [{ heavy: { slotMemoryGb: 0 } }, 'heavy.slotMemoryGb'],
-      [{ heavy: { slotMemoryGb: -1 } }, 'heavy.slotMemoryGb'],
-      [{ heavy: { slotMemoryGb: '7' } }, 'heavy.slotMemoryGb'],
-      [{ services: [] }, 'services'],
-      [{ services: { 'bad/name': {} } }, 'services.bad/name'],
-      [{ services: { db: null } }, 'services.db'],
-      [{ services: { db: { containerPort: 5432, extra: 1, image: 'postgres', port: 5432 } } }, 'services.db.extra'],
-    ])('rejects invalid configuration %j at its key', (value, key) => {
+      [null, '(root): expected an object'],
+      [[], '(root): expected an object'],
+      [{ unknown: true }, 'unknown: unknown key'],
+      [{ setup: 'vp install' }, 'setup: expected an array of strings'],
+      [{ setup: [1] }, 'setup: expected an array of strings'],
+      [{ setup: [1, 'vp install'] }, 'setup: expected an array of strings'],
+      [{ setup: [''] }, 'setup: expected non-empty commands without line breaks'],
+      [{ setup: ['   '] }, 'setup: expected non-empty commands without line breaks'],
+      [{ setup: ['echo a\necho b'] }, 'setup: expected non-empty commands without line breaks'],
+      [{ setup: ['echo a\recho b'] }, 'setup: expected non-empty commands without line breaks'],
+      [{ env: [] }, 'env: expected an object'],
+      [{ env: { X: 1 } }, 'env.X: expected a string'],
+      [{ env: { 'BAD-NAME': 'x' } }, 'env.BAD-NAME: expected an environment variable name'],
+      [{ heavy: null }, 'heavy: expected an object'],
+      [{ heavy: [] }, 'heavy: expected an object'],
+      [{ heavy: { other: 3 } }, 'heavy.other: unknown key'],
+      [{ heavy: { slotMemoryGb: 0 } }, 'heavy.slotMemoryGb: expected a positive finite number'],
+      [{ heavy: { slotMemoryGb: -1 } }, 'heavy.slotMemoryGb: expected a positive finite number'],
+      [{ heavy: { slotMemoryGb: '7' } }, 'heavy.slotMemoryGb: expected a positive finite number'],
+      [{ heavy: { slotMemoryGb: Number.NaN } }, 'heavy.slotMemoryGb: expected a positive finite number'],
+      [{ heavy: { slotMemoryGb: true } }, 'heavy.slotMemoryGb: expected a positive finite number'],
+      [{ heavy: { slotMemoryGb: {} } }, 'heavy.slotMemoryGb: expected a positive finite number'],
+      [{ heavy: { slotMemoryGb: Number.POSITIVE_INFINITY } }, 'heavy.slotMemoryGb: expected a positive finite number'],
+      [{ services: [] }, 'services: expected an object'],
+      [{ services: { 'bad/name': {} } }, 'services.bad/name: expected a Docker service name'],
+      [{ services: { db: null } }, 'services.db: expected an object'],
+      [{ services: { db: { containerPort: 5432, extra: 1, image: 'postgres', port: 5432 } } }, 'services.db.extra: unknown key'],
+    ])('rejects invalid configuration %j at its key', (value, reason) => {
       writeFileSync(file, JSON.stringify(value));
-      let thrown: unknown;
-      try {
-        loadWorktreeConfig(root);
-      } catch (error) {
-        thrown = error;
-      }
-      expect(thrown).toBeInstanceOf(CliError);
-      expect(thrown).toMatchObject({ code: 'worktree_config_invalid' });
-      // SAFETY: the previous assertion checks the thrown value is a CliError.
-      expect((thrown as CliError).message).toContain(`${file}: ${key}:`);
+      expect(thrown()).toMatchObject({ code: 'worktree_config_invalid', message: `${file}: ${reason}` });
     });
 
     it.each([
-      ['image', undefined],
-      ['image', ''],
-      ['image', 1],
-      ['port', undefined],
-      ['port', 0],
-      ['port', 65_536],
-      ['port', 1.5],
-      ['port', '5432'],
-      ['containerPort', 0],
-      ['containerPort', 65_536],
-      ['containerPort', 3.5],
-      ['env', null],
-      ['env', { PASSWORD: false }],
-      ['env', { 'BAD=KEY': 'value' }],
-      ['args', 'redis-server'],
-      ['args', [1]],
-      ['tmpfs', []],
-      ['tmpfs', ''],
-      ['memory', 2],
-      ['memory', ''],
-      ['ready', 'pg_isready'],
-      ['ready', []],
-      ['ready', ['']],
-      ['ready', [1]],
-    ])('rejects service %s = %j', (key, value) => {
+      ['image', undefined, 'expected a non-empty string'],
+      ['image', '', 'expected a non-empty string'],
+      ['image', '   ', 'expected a non-empty string'],
+      ['image', 1, 'expected a non-empty string'],
+      ['port', undefined, 'expected an integer between 1 and 65535'],
+      ['port', 0, 'expected an integer between 1 and 65535'],
+      ['port', 65_536, 'expected an integer between 1 and 65535'],
+      ['port', 1.5, 'expected an integer between 1 and 65535'],
+      ['port', '5432', 'expected an integer between 1 and 65535'],
+      ['port', true, 'expected an integer between 1 and 65535'],
+      ['port', {}, 'expected an integer between 1 and 65535'],
+      ['containerPort', 0, 'expected an integer between 1 and 65535'],
+      ['containerPort', 65_536, 'expected an integer between 1 and 65535'],
+      ['containerPort', 3.5, 'expected an integer between 1 and 65535'],
+      ['env', null, 'expected an object'],
+      ['env', { PASSWORD: false }, 'expected a string', '.PASSWORD'],
+      ['env', { 'BAD=KEY': 'value' }, 'expected an environment variable name', '.BAD=KEY'],
+      ['args', 'redis-server', 'expected an array of strings'],
+      ['args', [1], 'expected an array of strings'],
+      ['args', [1, 'redis-server'], 'expected an array of strings'],
+      ['tmpfs', [], 'expected a non-empty string'],
+      ['tmpfs', '', 'expected a non-empty string'],
+      ['tmpfs', '   ', 'expected a non-empty string'],
+      ['memory', 2, 'expected a non-empty string'],
+      ['memory', '', 'expected a non-empty string'],
+      ['memory', '   ', 'expected a non-empty string'],
+      ['ready', 'pg_isready', 'expected an array of strings'],
+      ['ready', [], 'expected a non-empty command array'],
+      ['ready', [''], 'expected a non-empty command array'],
+      ['ready', ['   '], 'expected a non-empty command array'],
+      ['ready', [1], 'expected an array of strings'],
+      ['ready', [1, 'pg_isready'], 'expected an array of strings'],
+    ])('rejects service %s = %j', (key, value, reason, suffix = '') => {
       writeFileSync(file, JSON.stringify({ services: { db: { containerPort: 5432, image: 'postgres', port: 5432, [key]: value } } }));
-      expect(() => loadWorktreeConfig(root)).toThrow(CliError);
-      expect(() => loadWorktreeConfig(root)).toThrow(`${file}: services.db.${key}`);
+      expect(thrown()).toMatchObject({ code: 'worktree_config_invalid', message: `${file}: services.db.${key}${suffix}: ${reason}` });
     });
 
     it('rejects service names which would share a lowercased container', () => {
       const service = { containerPort: 6379, image: 'redis', port: 6379 };
       writeFileSync(file, JSON.stringify({ services: { Cache: service, cache: service } }));
-      expect(() => loadWorktreeConfig(root)).toThrow(`${file}: services.cache:`);
+      expect(thrown()).toMatchObject({ code: 'worktree_config_invalid', message: `${file}: services.cache: duplicates a service name ignoring case` });
     });
 
     it('reports malformed JSON and unreadable files with the filename', () => {
       writeFileSync(file, '{broken');
-      expect(() => loadWorktreeConfig(root)).toThrow(`${file}: (root): invalid JSON:`);
+      const error = thrown();
+      expect(error).toMatchObject({ code: 'worktree_config_invalid' });
+      expect(error.message).toContain(`${file}: (root): invalid JSON:`);
     });
 
     it('reports a directory instead of a configuration file', () => {
       mkdirSync(file);
-      expect(() => loadWorktreeConfig(root)).toThrow(`${file}: (root): cannot read:`);
+      const error = thrown();
+      expect(error).toMatchObject({ code: 'worktree_config_invalid' });
+      expect(error.message).toContain(`${file}: (root): cannot read:`);
     });
   });
 });

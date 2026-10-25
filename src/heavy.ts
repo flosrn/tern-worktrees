@@ -31,7 +31,7 @@ export interface HeavyOptions {
 
 const slotCount = (options: HeavyOptions): number => Math.max(1, Math.floor((options.totalBytes ?? totalmem()) / GIB / (options.slotMemoryGb ?? 7)));
 const slotPath = (slot: number): string => path.join(pluginData(), 'heavy', `slot-${slot}.lock`);
-// Error values cross the filesystem boundary before they have a domain type.
+// Filesystem and process errors carry string codes only on Error objects.
 // oxlint-disable-next-line anti-slop/no-unknown-parameters
 const hasCode = (error: unknown, code: string): boolean => error instanceof Error && 'code' in error && error.code === code;
 
@@ -64,9 +64,12 @@ const parseOwner = (bytes: string): HeavyOwner | null => {
     return null;
   }
   const fields: { pid?: unknown; cwd?: unknown; command?: unknown; startedAt?: unknown } = raw;
-  // Parse the PID before passing it to process.kill.
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof
-  if (typeof fields.pid !== 'number' || !Number.isInteger(fields.pid) || fields.pid <= 0) {
+  if (!Number.isInteger(fields.pid)) {
+    return null;
+  }
+  // SAFETY: Number.isInteger accepts only numbers, without coercion.
+  const pid = fields.pid as number;
+  if (pid < 1) {
     return null;
   }
   if (!isString(fields.cwd) || !isString(fields.startedAt)) {
@@ -75,12 +78,12 @@ const parseOwner = (bytes: string): HeavyOwner | null => {
   if (!Array.isArray(fields.command) || !fields.command.every(isString)) {
     return null;
   }
-  return { command: fields.command, cwd: fields.cwd, pid: fields.pid, startedAt: fields.startedAt };
+  return { command: fields.command, cwd: fields.cwd, pid, startedAt: fields.startedAt };
 };
 
 const readOwner = (file: string): HeavyOwner | null => {
   try {
-    return parseOwner(readFileSync(file, 'utf-8'));
+    return parseOwner(readFileSync(file).toString());
   } catch (error) {
     if (hasCode(error, 'ENOENT')) {
       return null;
@@ -120,7 +123,7 @@ const releaseOwnedSlot = (file: string, inode: number, bytes: string): (() => vo
 };
 
 const tryAcquireSlot = (file: string, owner: HeavyOwner): (() => void) | null => {
-  const staging = path.join(pluginData(), 'heavy', `owner-${process.pid}-${randomUUID()}`);
+  const staging = path.join(path.dirname(file), `owner-${process.pid}-${randomUUID()}`);
   const bytes = JSON.stringify(owner);
   writeFileSync(staging, bytes, { flag: 'wx', mode: 0o600 });
   try {

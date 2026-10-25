@@ -54,10 +54,11 @@ const rejectUnknownKeys = (keys: string[], known: readonly string[], prefix: str
 };
 
 const stringList = (value: unknown, key: string, fail: Fail): string[] => {
-  if (!Array.isArray(value) || !value.every(isString)) {
+  if (!Array.isArray(value) || value.some(entry => !isString(entry))) {
     return fail(key, 'expected an array of strings');
   }
-  return value;
+  // SAFETY: the guard above rejects each entry that is not a string.
+  return value as string[];
 };
 
 const EXPECTED_OBJECT = 'expected an object';
@@ -82,10 +83,12 @@ const environment = (value: unknown, key: string, expand: boolean, fail: Fail): 
 };
 
 const portNumber = (value: unknown, key: string, fail: Fail): number => {
-  if (typeof value !== 'number' || !Number.isInteger(value)) {
+  if (!Number.isInteger(value)) {
     return fail(key, 'expected an integer between 1 and 65535');
   }
-  return value >= 1 && value <= 65_535 ? value : fail(key, 'expected an integer between 1 and 65535');
+  // SAFETY: Number.isInteger rejects non-numbers without coercion.
+  const port = value as number;
+  return port >= 1 && port <= 65_535 ? port : fail(key, 'expected an integer between 1 and 65535');
 };
 
 const readService = (value: unknown, key: string, fail: Fail): Service => {
@@ -124,7 +127,7 @@ const readService = (value: unknown, key: string, fail: Fail): Service => {
 const decode = (file: string, fail: Fail): RawWorktreeConfig => {
   let decoded: unknown;
   try {
-    decoded = JSON.parse(readFileSync(file, 'utf-8'));
+    decoded = JSON.parse(readFileSync(file).toString());
   } catch (error) {
     return fail('(root)', error instanceof SyntaxError ? `invalid JSON: ${String(error)}` : `cannot read: ${String(error)}`);
   }
@@ -146,7 +149,7 @@ const readServices = (raw: RawWorktreeConfig, fail: Fail): WorktreeConfig['servi
         fail(`services.${name}`, 'duplicates a service name ignoring case');
       }
       names.add(name.toLowerCase());
-      Object.defineProperty(services, name, { configurable: true, enumerable: true, value: readService(value, `services.${name}`, fail), writable: true });
+      services[name] = readService(value, `services.${name}`, fail);
     }
   }
   return services;
@@ -160,8 +163,9 @@ const readHeavy = (raw: RawWorktreeConfig, fail: Fail): WorktreeConfig['heavy'] 
     }
     rejectUnknownKeys(Object.keys(raw.heavy), ['slotMemoryGb'], 'heavy.', fail);
     if ('slotMemoryGb' in raw.heavy) {
-      const memory = raw.heavy.slotMemoryGb;
-      if (typeof memory !== 'number' || !Number.isFinite(memory) || memory <= 0) {
+      // SAFETY: Number.isFinite below rejects non-numbers before comparison or assignment. The assertion does not coerce the value.
+      const memory = raw.heavy.slotMemoryGb as number;
+      if (!(Number.isFinite(memory) && memory > 0)) {
         fail('heavy.slotMemoryGb', 'expected a positive finite number');
       }
       slotMemoryGb = memory;

@@ -101,8 +101,8 @@ export const CANCEL_EXIT_CODES: Readonly<Record<CancelSignal, number>> = { SIGHU
 const isCancelSignal = (signal: NodeJS.Signals | null): signal is CancelSignal => signal === 'SIGHUP' || signal === 'SIGINT' || signal === 'SIGTERM';
 
 /** The signal an aborted run forwards: SIGINT or SIGHUP when the abort names it, else SIGTERM. */
-const abortSignalOf = (signal: AbortSignal | undefined): CancelSignal => {
-  const reason: unknown = signal?.reason;
+const abortSignalOf = (signal: AbortSignal): CancelSignal => {
+  const reason: unknown = signal.reason;
   if (reason === 'SIGINT') {
     return 'SIGINT';
   }
@@ -132,8 +132,8 @@ export const runInherited = async (
       // The group can finish between cancellation and delivery of the signal.
     }
   };
-  const onAbort = (): void => {
-    forward(abortSignalOf(opts.signal));
+  const onAbort = function onAbort(this: AbortSignal): void {
+    forward(abortSignalOf(this));
   };
   opts.signal?.addEventListener('abort', onAbort);
   opts.onSignal?.(forward);
