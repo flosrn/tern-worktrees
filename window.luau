@@ -727,6 +727,54 @@ local function repos_of_sessions(
 	return repos
 end
 
+local function focused_cwd(cx: WindowCx): string?
+	local focused = cx.session:focused()
+	if focused == nil then
+		return nil
+	end
+	local pane = cx.session:pane(focused)
+	local cwd = if pane ~= nil then known_cwd(pane.cwd) else nil
+	if cwd ~= nil then
+		return cwd
+	end
+	for _, agent in ipairs(cx.agents:list()) do
+		if agent.pane == focused then
+			cwd = known_cwd(agent.cwd)
+			if cwd ~= nil then
+				return cwd
+			end
+		end
+	end
+	local tab = if pane ~= nil and pane.tab ~= nil then pane.tab else cx.session:tab_of(focused)
+	if tab ~= nil then
+		for _, other in ipairs(cx.session:panes()) do
+			if other.tab == tab then
+				cwd = known_cwd(other.cwd)
+				if cwd ~= nil then
+					return cwd
+				end
+			end
+		end
+	end
+	return nil
+end
+
+local function focused_root(cx: WindowCx): string?
+	local cwd = focused_cwd(cx)
+	local root = if cwd ~= nil then rootOfDir[cwd] else nil
+	return if type(root) == "string" then root else nil
+end
+
+local function selected_root(cx: WindowCx): string?
+	local root = focused_root(cx)
+	if root ~= nil then
+		return root
+	end
+	local cur = session_index(cx).current
+	local facts = if cur ~= nil then reposOfSession[cur.id] else nil
+	return if facts ~= nil then facts.first else nil
+end
+
 local function resolve_sessions(cx: WindowCx, cb: (cx: WindowCx) -> ())
 	local cwds: { string } = {}
 	local seen: { [string]: boolean } = {}
@@ -736,6 +784,10 @@ local function resolve_sessions(cx: WindowCx, cb: (cx: WindowCx) -> ())
 			seen[cwd] = true
 			table.insert(cwds, cwd)
 		end
+	end
+	local cwd = focused_cwd(cx)
+	if cwd ~= nil and not seen[cwd] then
+		table.insert(cwds, cwd)
 	end
 	if #cwds == 0 then
 		table.clear(reposOfSession)
@@ -1463,9 +1515,7 @@ local function register_rows(root: string, res: BranchesResult)
 				if rows == nil or rows[id] == nil then
 					return false
 				end
-				local focused = cx.session:focused()
-				local cwd = if focused ~= nil then cwdOfPane[focused] else nil
-				return cwd ~= nil and rootOfDir[cwd] == root
+				return focused_root(cx) == root
 			end,
 			run = function(cx: WindowCx)
 				create(cx, root, target.createArgs, target.branch, target.checkout)
@@ -1773,12 +1823,7 @@ local function start(cx: WindowCx)
 		if startCount ~= started then
 			return
 		end
-		local cur = session_index(cx2).current
-		local facts = if cur ~= nil then reposOfSession[cur.id] else nil
-		local focused = cx2.session:focused()
-		local pane = if focused ~= nil then cx2.session:pane(focused) else nil
-		local focusedRoot = if pane ~= nil and pane.cwd ~= nil then rootOfDir[pane.cwd] else nil
-		local root = if type(focusedRoot) == "string" then focusedRoot else if facts ~= nil then facts.first else nil
+		local root = selected_root(cx2)
 		if root ~= nil then
 			branch_picker(cx2, root)
 		else
@@ -1936,9 +1981,7 @@ tern.command({
 	icon = "branch",
 	run = function(cx: WindowCx)
 		resolve_sessions(cx, function(cx2)
-			local cur = session_index(cx2).current
-			local facts = if cur ~= nil then reposOfSession[cur.id] else nil
-			from_issue(cx2, if facts ~= nil then facts.first else nil)
+			from_issue(cx2, selected_root(cx2))
 		end)
 	end,
 })
