@@ -9,7 +9,7 @@ import { close, ls } from '../src/tern.ts';
 import { guardWorkToLose } from '../src/work-to-lose.ts';
 import {
   cliJson,
-  ghFixture,
+  ghCleanFixture,
   git,
   gitShim,
   ignoreGlobally,
@@ -324,13 +324,11 @@ describe('clean command', () => {
       expect(result.remove.worktrees).toContain(dir);
     });
 
-    it('keeps branches when their inspection fails', async () => {
+    it('stops planning when the batched branch lookup fails', async () => {
       const repo = await tmpRepo('app');
       await git(repo.dir, 'branch', 'merged');
-      await gitShim('case " $* " in *" rev-parse refs/heads/merged "*) echo inspect-refused >&2; exit 1;; esac');
-      const result = await run(['--repo', repo.dir]);
-      expect(result.remove.branches).toStrictEqual([]);
-      expect(result.keep).toContainEqual({ id: 'merged', kind: 'branch', reason: 'branch inspection failed: inspect-refused' });
+      await gitShim('case " $* " in *" for-each-ref "*) echo inspect-refused >&2; exit 1;; esac');
+      await expect(run(['--repo', repo.dir])).rejects.toMatchObject({ code: 'git_failed', message: 'inspect-refused' });
     });
 
     it('reports a fetch failure and still recomputes a conservative plan', async () => {
@@ -354,10 +352,7 @@ describe('clean command', () => {
       const head = await git(dir, 'rev-parse', 'HEAD');
       const tip = head.trim();
       await useGithubOrigin();
-      ghFixture(
-        ['pr', 'list', '--repo', 'virtusize/aoyama', '--state', 'merged', '--limit', '10000', '--json', 'headRefName,headRefOid,number'],
-        JSON.stringify([{ headRefName: 'feature', headRefOid: tip, number: 1 }]),
-      );
+      ghCleanFixture({ merged: { nodes: [{ headRefOid: tip }] } });
       const planned = await run(['--repo', repo.dir]);
       expect(planned.remove.worktrees).toStrictEqual([dir]);
       writeFileSync(path.join(dir, 'feature.txt'), 'feature after merge\n');

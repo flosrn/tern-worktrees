@@ -277,6 +277,18 @@ describe('clean observable safety decisions', () => {
   });
 
   describe('process stop outcomes', () => {
+    it('does not stop a selected process in a worktree retained for work to lose', async () => {
+      const { dir, repo } = await linked();
+      writeFileSync(path.join(dir, 'draft.txt'), 'keep this work\n');
+      const selected = { command: 'worker', cwd: path.join(dir, 'nested'), pid: 63_552 };
+      vi.mocked(planResources).mockResolvedValue({ ...resources(), processes: [selected] });
+      vi.mocked(applyResources).mockResolvedValue({ failedProcesses: [] });
+      const result = await run(['--repo', repo, '--apply']);
+      expect(result.remove.processes).toStrictEqual([]);
+      expect(vi.mocked(applyResources).mock.calls[0]?.[0].processes).toStrictEqual([]);
+      expect(existsSync(path.join(dir, 'draft.txt'))).toBeTruthy();
+    });
+
     it('reports stopped processes and prevents only worktrees belonging to failed stops', async () => {
       const { dir, repo } = await linked();
       const unrelated = path.join(tempDir('outside'), 'unrelated');

@@ -2,9 +2,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vite-plus/test';
 import { run } from '../src/commands/clean.ts';
-import { ghFixture, git, gitShim, readLog, tempDir, tmpRepo, useGithubOrigin, useSandbox, writeTernLs } from './helpers.ts';
-
-const mergedQuery = ['pr', 'list', '--repo', 'virtusize/aoyama', '--state', 'merged', '--limit', '10000', '--json', 'headRefName,headRefOid,number'];
+import { ghCleanFixture, git, gitShim, readLog, tempDir, tmpRepo, useGithubOrigin, useSandbox, writeTernLs } from './helpers.ts';
 
 const commitFile = async (dir: string, file: string, content: string): Promise<void> => {
   writeFileSync(path.join(dir, file), content);
@@ -30,14 +28,14 @@ describe('clean integration proofs', () => {
     const tip = head.trim();
     await git(worker, 'switch', '--quiet', 'worker');
     await useGithubOrigin();
-    ghFixture(mergedQuery, JSON.stringify([{ headRefName: 'integration', headRefOid: tip, number: 17 }]));
+    ghCleanFixture({ merged: { nodes: [{ headRefOid: tip }] } });
     const result = await run(['--repo', repo.dir, '--apply']);
     expect(result.remove.branches).toStrictEqual(['integration', 'second-worker', 'worker']);
     expect(result.remove.worktrees).toStrictEqual([worker]);
     const log = process.env.FAKE_GH_LOG;
     expect(log).toBeDefined();
     expect(existsSync(worker)).toBeFalsy();
-    expect(readLog(log ?? '').filter(line => line.startsWith('pr list'))).toStrictEqual([mergedQuery.join(' ')]);
+    expect(readLog(log ?? '').filter(line => line.startsWith('api graphql'))).toHaveLength(1);
   });
 
   it('removes an unpushed multi-commit worker squashed into default while preserving new work', async () => {

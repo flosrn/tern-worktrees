@@ -61,22 +61,14 @@ export const isMerged = async (root: string, branch: string, base: string, repoR
   return held.includes(true);
 };
 
-/** Proves integration for clean using ancestry, the shared merged PR heads, or an unchanged merge tree. */
-export const isCleanMerged = async (root: string, branch: string, base: string, mergedHeads: string[], defaultTree: string | null): Promise<boolean> => {
-  const ref = `refs/heads/${branch}`;
-  if (await isAncestor(root, ref, `origin/${base}`)) {
+/** Checks a shared ancestry proof before falling back to an unchanged merge tree. */
+export const isCleanMerged = async (root: string, branch: string, base: string, proven: boolean, defaultTree: string | null): Promise<boolean> => {
+  if (proven) {
     return true;
-  }
-  for (const head of mergedHeads) {
-    // Stop at the first proof.
-    // eslint-disable-next-line no-await-in-loop
-    if (await isAncestor(root, ref, head)) {
-      return true;
-    }
   }
   if (defaultTree === null) {
     return false;
   }
-  const merged = await gitRun(root, 'merge-tree', '--write-tree', `origin/${base}`, ref);
+  const merged = await gitRun(root, 'merge-tree', '--write-tree', `origin/${base}`, `refs/heads/${branch}`);
   return merged.status === 0 && merged.stdout.trim() === defaultTree;
 };

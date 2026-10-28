@@ -274,9 +274,9 @@ describe('repository resources', () => {
   });
 
   describe('directory protection', () => {
-    it('does not inspect real processes on non-Linux hosts without an override', async () => {
+    it('does not inspect real processes on unsupported hosts without an override', async () => {
       vi.stubEnv('TERN_WT_PROC_ROOT', '');
-      vi.stubGlobal('process', { ...process, platform: 'darwin' });
+      vi.stubGlobal('process', { ...process, platform: 'win32' });
       const plan = await planResources(ctx);
       expect(plan.processes).toStrictEqual([]);
       expect(plan.warnings[0]).toContain('Linux');
@@ -284,7 +284,7 @@ describe('repository resources', () => {
       expect(plan.keep).toContainEqual({
         id: '/repo/wt/remove',
         kind: 'worktree',
-        reason: 'Process inspection unavailable: Linux /proc only; worktree process ownership cannot be proven.',
+        reason: 'Process inspection unavailable: Linux /proc or macOS lsof required; worktree process ownership cannot be proven.',
       });
       expect(calls.some(argv => argv[0] === 'ps')).toBeFalsy();
     });
