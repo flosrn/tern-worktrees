@@ -2,17 +2,19 @@ import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { run } from '../src/commands/clean.ts';
-import { listPullRequests } from '../src/github.ts';
+import { recoverCleanTarget } from '../src/clean-recovery.ts';
+import { ghTry } from '../src/github.ts';
 import { CliError } from '../src/proc.ts';
 import { guardBusyTabs, isCleanMerged } from '../src/teardown.ts';
 import { close, ls } from '../src/tern.ts';
 import { guardWorkToLose } from '../src/work-to-lose.ts';
-import { git, gitShim, logGitCalls, readLog, tempDir, tmpRepo, useGithubOrigin, useSandbox, writeTernLs } from './helpers.ts';
+import { ghCleanFixture, git, gitShim, logGitCalls, readLog, tempDir, tmpRepo, useGithubOrigin, useSandbox, writeTernLs } from './helpers.ts';
 
 vi.mock(import('../src/github.ts'), { spy: true });
 vi.mock(import('../src/teardown.ts'), { spy: true });
 vi.mock(import('../src/tern.ts'), { spy: true });
 vi.mock(import('../src/work-to-lose.ts'), { spy: true });
+vi.mock(import('../src/clean-recovery.ts'), { spy: true });
 
 describe('inspection failures at command boundaries', () => {
   beforeEach(() => {
@@ -21,19 +23,20 @@ describe('inspection failures at command boundaries', () => {
   });
 
   afterEach(() => {
-    vi.mocked(listPullRequests).mockReset();
+    vi.mocked(ghTry).mockReset();
     vi.mocked(guardBusyTabs).mockReset();
     vi.mocked(isCleanMerged).mockReset();
     vi.mocked(close).mockReset();
     vi.mocked(ls).mockReset();
     vi.mocked(guardWorkToLose).mockReset();
+    vi.mocked(recoverCleanTarget).mockReset();
   });
 
   it.each([new Error('query unavailable'), 'query unavailable'])('reports a thrown merged PR query failure: %s', async failure => {
     const repo = await tmpRepo('app');
     await git(repo.dir, 'branch', 'integrated');
     await useGithubOrigin();
-    vi.mocked(listPullRequests).mockRejectedValueOnce(failure);
+    vi.mocked(ghTry).mockRejectedValueOnce(failure);
     const result = await run(['--repo', repo.dir]);
     expect(result.warnings).toContain('merged PR check failed: query unavailable');
     expect(result.remove.branches).toStrictEqual(['integrated']);
@@ -86,7 +89,14 @@ describe('inspection failures at command boundaries', () => {
   it('reports non-Error branch and Tern inspection failures', async () => {
     const repo = await tmpRepo('app');
     await git(repo.dir, 'branch', 'merged');
-    vi.mocked(isCleanMerged).mockRejectedValueOnce('ancestry unavailable');
+    vi.mocked(isCleanMerged).mockImplementation(async (_root, branch) => {
+      await Promise.resolve();
+      if (branch === 'merged') {
+        // eslint-disable-next-line no-throw-literal, @typescript-eslint/only-throw-error -- Exercise the non-Error boundary contract.
+        throw 'ancestry unavailable';
+      }
+      return true;
+    });
     vi.mocked(ls).mockRejectedValue('daemon unavailable');
     const result = await run(['--repo', repo.dir]);
     expect(result.keep).toContainEqual({ id: 'merged', kind: 'branch', reason: 'branch inspection failed: ancestry unavailable' });
@@ -132,5 +142,38 @@ describe('inspection failures at command boundaries', () => {
     expect(result.remove.worktrees).toStrictEqual([]);
     expect(result.remove.branches).toStrictEqual([]);
     expect(result.keep.find(item => item.id === dir && item.kind === 'worktree')?.reason).toContain('inspection failed');
+  });
+
+  it('accepts usable GraphQL partial data despite a nonzero CLI exit', async () => {
+    const repo = await tmpRepo('app');
+    await git(repo.dir, 'branch', 'feat/17');
+    await useGithubOrigin();
+    vi.mocked(ghTry).mockResolvedValueOnce({
+      error: 'missing unrelated number',
+      stdout: JSON.stringify([{ data: { r0: { n17: { __typename: 'Issue', issueState: 'CLOSED', number: 17 } } } }]),
+    });
+    const result = await run(['--repo', repo.dir]);
+    expect(result.remove.branches).toContain('feat/17');
+    expect(result.warnings).toContain('merged PR check failed: missing unrelated number');
+  });
+
+  it('reports Error branch failures without interpreting them as integration evidence', async () => {
+    const repo = await tmpRepo('app');
+    await git(repo.dir, 'branch', 'merged');
+    vi.mocked(isCleanMerged).mockRejectedValueOnce(new Error('branch proof failed'));
+    const result = await run(['--repo', repo.dir]);
+    expect(result.keep).toContainEqual({ id: 'merged', kind: 'branch', reason: 'branch inspection failed: branch proof failed' });
+  });
+
+  it('retains linked work when recovery throws a non-Error value', async () => {
+    const repo = await tmpRepo('app');
+    const dir = path.join(tempDir('outside'), '17-worker');
+    await git(repo.dir, 'worktree', 'add', '--quiet', '-b', 'feat/17', dir, 'origin/main');
+    await useGithubOrigin();
+    ghCleanFixture({ n17: { __typename: 'Issue', issueState: 'CLOSED', number: 17 } });
+    vi.mocked(recoverCleanTarget).mockRejectedValueOnce('recovery unavailable');
+    const result = await run(['--repo', repo.dir, '--apply']);
+    expect(result.remove.worktrees).toStrictEqual([]);
+    expect(result.keep).toContainEqual({ id: dir, kind: 'worktree', reason: 'recovery failed: recovery unavailable' });
   });
 });

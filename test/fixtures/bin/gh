@@ -2,6 +2,9 @@
 if [ -n "${FAKE_GH_LOG:-}" ]; then
 	printf '%s\n' "$*" >>"$FAKE_GH_LOG"
 fi
+if [ "$1 $2" = "api graphql" ] && [ -f "${FAKE_GH_DIR:-}/graphql.json" ]; then
+	exec cat "${FAKE_GH_DIR:-}/graphql.json"
+fi
 key=$(printf '%s_' "$@" | sed 's/_$//' | tr '/ ' '__')
 fixture="${FAKE_GH_DIR:-}/$key.json"
 if [ -n "${FAKE_GH_DIR:-}" ] && [ -f "$fixture" ]; then

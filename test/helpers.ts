@@ -79,6 +79,7 @@ export const useSandbox = (): Sandbox => {
   }
   const gitConfig = path.join(root, 'gitconfig');
   writeFileSync(gitConfig, '');
+  vi.stubEnv('XDG_STATE_HOME', path.join(root, 'state'));
   vi.stubEnv('TERN_WT_HOME', sandbox.wtHome);
   vi.stubEnv('TERN_PLUGIN_DATA', sandbox.pluginData);
   vi.stubEnv('TERN_WT_PROC_ROOT', path.join(root, 'proc'));
@@ -201,6 +202,28 @@ export const useOmp = (settings: FakeOmpSettings): string => {
 export const ghFixture = (args: string[], body: string): void => {
   const key = args.join('_').replaceAll(/[/ ]/gu, '_');
   writeFileSync(path.join(activeSandbox().ghDir, `${key}.json`), body);
+};
+
+interface CleanGraphNode {
+  __typename: string;
+  number: number;
+  issueState?: string;
+  prState?: string;
+}
+
+interface CleanGraphRepository {
+  merged?: { nodes: { headRefOid: string }[] };
+  [alias: `n${string}`]: CleanGraphNode | null | undefined;
+}
+
+interface CleanGraphPage {
+  data: Record<string, CleanGraphRepository | null>;
+  errors?: { message: string }[];
+}
+
+/** Gives GraphQL pages for the clean query with linked issue and PR aliases. */
+export const ghCleanFixture = (repository: CleanGraphRepository, pages?: CleanGraphPage[]): void => {
+  writeFileSync(path.join(activeSandbox().ghDir, 'graphql.json'), JSON.stringify(pages ?? [{ data: { r0: { merged: { nodes: [] }, ...repository } } }]));
 };
 
 /** Gives the path of the managed worktree `dirName` for the repository `repoName`, in the worktree root of the sandbox. */

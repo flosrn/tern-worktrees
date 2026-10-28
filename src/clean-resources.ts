@@ -47,6 +47,16 @@ interface ContainerInfo {
   Mounts: { Source: string }[];
 }
 
+interface ResourceSample {
+  entries: ProcessIdentity[];
+  containers: ContainerInfo[];
+  keep: KeepResource[];
+  warnings: string[];
+  protectedWorktrees: string[];
+  sessions: { block: { cwd: string | null; id: number }; snapshot: TernProcessSnapshot }[] | null;
+}
+
+const resourceSamples = new WeakMap<ResourcePlan, ResourceSample>();
 const processIdentities = new WeakMap<CleanProcess, ProcessIdentity>();
 const containerIdentities = new Map<string, string>();
 const pathIdentities = new Map<string, { dev: number; ino: number }>();
@@ -122,8 +132,7 @@ const selectContainer = (container: ContainerInfo, containers: ContainerInfo[], 
   }
 };
 
-const planContainers = async (ctx: ResourceContext, plan: ResourcePlan, liveCwds: string[]): Promise<void> => {
-  const containers = await inspectContainers();
+const planContainers = (ctx: ResourceContext, plan: ResourcePlan, liveCwds: string[], containers: ContainerInfo[]): void => {
   for (const container of containers) {
     selectContainer(container, containers, ctx, plan, liveCwds);
   }
@@ -199,11 +208,16 @@ const protectBusyBlock = (cwd: string | null, snapshot: TernProcessSnapshot, pro
   }
 };
 
-const protectBlock = async (block: { cwd: string | null; id: number }, ctx: ResourceContext, entries: ProcessIdentity[], protection: ProcessProtection): Promise<void> => {
+const protectBlock = (
+  block: { cwd: string | null; id: number },
+  snapshot: TernProcessSnapshot,
+  ctx: ResourceContext,
+  entries: ProcessIdentity[],
+  protection: ProcessProtection,
+): void => {
   if (block.cwd !== null) {
     protection.liveCwds.push(block.cwd);
   }
-  const snapshot = await processOf(block.id);
   const busy = isBusyProcess(snapshot);
   if (busy) {
     protectBusyBlock(block.cwd, snapshot, protection);
@@ -214,20 +228,22 @@ const protectBlock = async (block: { cwd: string | null; id: number }, ctx: Reso
   protectSnapshot(snapshot, entries, protection);
 };
 
-const protectSessions = async (ctx: ResourceContext, entries: ProcessIdentity[], protection: ProcessProtection, warnings: string[]): Promise<boolean> => {
-  try {
-    const listing = await ls();
-    const blocks = listing.sessions.flatMap(session => session.tabs.flatMap(tab => tab.blocks));
-    await Promise.all(
-      blocks.map(async block => {
-        await protectBlock(block, ctx, entries, protection);
-      }),
-    );
-    return true;
-  } catch {
+const protectSessions = async (
+  ctx: ResourceContext,
+  entries: ProcessIdentity[],
+  protection: ProcessProtection,
+  warnings: string[],
+  sessions: ResourceSample['sessions'],
+): Promise<boolean> => {
+  if (sessions === null) {
     warnings.push('Cannot prove live Tern session ownership; processes are preserved.');
     return false;
   }
+  for (const { block, snapshot } of sessions) {
+    protectBlock(block, snapshot, ctx, entries, protection);
+  }
+  await Promise.resolve();
+  return true;
 };
 
 const processKeepReason = (entry: ProcessIdentity, parent: ProcessIdentity | undefined, ctx: ResourceContext, protection: ProcessProtection, sessionsKnown: boolean): string => {
@@ -290,14 +306,35 @@ const worktreeProtectionReason = (worktree: string, entries: ProcessIdentity[], 
   return active.map(entry => `Process ${entry.pid} (${entry.command}) is active or protected.`).join(' ');
 };
 
-/** Samples resources without signalling processes or changing files or Docker state. */
-export const planResources = async (ctx: ResourceContext): Promise<ResourcePlan> => {
-  const plan: ResourcePlan = { containers: [], keep: [], paths: [], processes: [], protectedWorktrees: [], warnings: [] };
+const sampleResources = async (ctx: ResourceContext, plan: ResourcePlan): Promise<ResourceSample> => {
   const entries = await processSnapshot(ctx, plan);
+  let sessions: ResourceSample['sessions'] = null;
+  try {
+    const listing = await ls();
+    sessions = await Promise.all(listing.sessions.flatMap(session => session.tabs.flatMap(tab => tab.blocks)).map(async block => ({ block, snapshot: await processOf(block.id) })));
+  } catch {
+    // An unavailable sample protects all worktrees in each subsequent selection.
+  }
+  return { containers: await inspectContainers(), entries, keep: [...plan.keep], protectedWorktrees: [...plan.protectedWorktrees], sessions, warnings: [...plan.warnings] };
+};
+
+/** Samples resources once. A previous plan lets selection reuse the same read-only evidence. */
+export const planResources = async (ctx: ResourceContext, previous?: ResourcePlan): Promise<ResourcePlan> => {
+  const plan: ResourcePlan = { containers: [], keep: [], paths: [], processes: [], protectedWorktrees: [], warnings: [] };
+  let sample = previous === undefined ? undefined : resourceSamples.get(previous);
+  if (sample === undefined) {
+    sample = await sampleResources(ctx, plan);
+  } else {
+    plan.keep.push(...sample.keep);
+    plan.protectedWorktrees.push(...sample.protectedWorktrees);
+    plan.warnings.push(...sample.warnings);
+  }
+  resourceSamples.set(plan, sample);
+  const { entries } = sample;
   const byPid = new Map(entries.map(entry => [entry.pid, entry]));
   const protection = callerProtection(entries, byPid);
   protectInfrastructure(entries, protection);
-  const sessionsKnown = await protectSessions(ctx, entries, protection, plan.warnings);
+  const sessionsKnown = await protectSessions(ctx, entries, protection, plan.warnings, sample.sessions);
   descendants(protection.sessionIds, entries);
   for (const pid of protection.sessionIds) {
     protection.protectedIds.add(pid);
@@ -312,7 +349,7 @@ export const planResources = async (ctx: ResourceContext): Promise<ResourcePlan>
       selectProcess(entry, processKeepReason(entry, byPid.get(entry.parent), ctx, protection, sessionsKnown), ctx, plan);
     }
   }
-  await planContainers(ctx, plan, protection.liveCwds);
+  planContainers(ctx, plan, protection.liveCwds, sample.containers);
   await Promise.all(
     (ctx.prunableWorktrees ?? []).map(async target => {
       await planPath(target, ctx, plan);
@@ -335,26 +372,31 @@ const waitForExit = async (expected: ProcessIdentity, attempts: number): Promise
 };
 
 const stopProcess = async (selected: CleanProcess, warnings: string[]): Promise<number[]> => {
-  const expected = processIdentities.get(selected);
-  if (expected === undefined || !sameProcess(await identityOf(selected.pid), expected)) {
-    warnings.push(`Preserved process ${selected.pid}: identity or cwd changed.`);
-    return (await identityOf(selected.pid)) === null ? [] : [selected.pid];
-  }
   try {
-    process.kill(selected.pid, 'SIGTERM');
-    await waitForExit(expected, 10);
-    if (sameProcess(await identityOf(selected.pid), expected)) {
-      process.kill(selected.pid, 'SIGKILL');
-      await timers.setTimeout(100);
+    const expected = processIdentities.get(selected);
+    if (expected === undefined || !sameProcess(await identityOf(selected.pid), expected)) {
+      warnings.push(`Preserved process ${selected.pid}: identity or cwd changed.`);
+      return (await identityOf(selected.pid)) === null ? [] : [selected.pid];
     }
+    try {
+      process.kill(selected.pid, 'SIGTERM');
+      await waitForExit(expected, 10);
+      if (sameProcess(await identityOf(selected.pid), expected)) {
+        process.kill(selected.pid, 'SIGKILL');
+        await timers.setTimeout(100);
+      }
+    } catch (error) {
+      warnings.push(`Cannot stop process ${selected.pid}: ${String(error)}`);
+    }
+    if ((await identityOf(selected.pid)) !== null) {
+      warnings.push(`Preserved process ${selected.pid}: process remains alive after signalling.`);
+      return [selected.pid];
+    }
+    return [];
   } catch (error) {
-    warnings.push(`Cannot stop process ${selected.pid}: ${String(error)}`);
-  }
-  if ((await identityOf(selected.pid)) !== null) {
-    warnings.push(`Preserved process ${selected.pid}: process remains alive after signalling.`);
+    warnings.push(`Preserved process ${selected.pid}: inspection unavailable: ${String(error)}`);
     return [selected.pid];
   }
-  return [];
 };
 
 const removeContainer = async (id: string, warnings: string[]): Promise<void> => {
