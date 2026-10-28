@@ -56,6 +56,18 @@ test("a managed worktree shows its branch and its number of changed files", func
 	eq(seg.command, NEW, "command")
 end)
 
+test("a tilde-form cwd finds the absolute worktree index entry", function()
+	local plugin = Stub.load({
+		env = Stub.ENV,
+		kv = {
+			worktreeIndex = {
+				["/home/u/wt/app/feat"] = { main = "/r/app", branch = "feat", changed = 2, owner = "tern" },
+			},
+		},
+	})
+	eq(segment_of(plugin, "~/wt/app/feat/src").text, "feat · 2", "tilde worktree segment")
+end)
+
 test("clicking the worktree segment opens the focused pane's repository", function()
 	local cx = Stub.cx({ { pane = 1, tab = 1, cwd = "/r/first" }, { pane = 2, tab = 2, cwd = FEAT } }, 2)
 	local plugin = Stub.load({ env = Stub.ENV })

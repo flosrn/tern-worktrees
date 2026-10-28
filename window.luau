@@ -23,7 +23,7 @@ local function remembered_root(): string?
 	return nil
 end
 
-local ROOT: string? = remembered_root()
+local ROOT: string? = nil
 
 -- Sets the worktree root to the root of a `list --all` answer without a trailing `/`, and writes it to kv. Skips a
 -- root that is not a string, is empty, or is the same.
@@ -149,8 +149,25 @@ local function in_flight(startedAt: number?): boolean
 	return startedAt ~= nil and tern.now() - startedAt <= CLI_OPTIONS.timeout_ms
 end
 
+local HOME = env("HOME")
+
+local function absolute_cwd(dir: string): string
+	if HOME ~= nil then
+		if dir == "~" then
+			return HOME
+		elseif string.sub(dir, 1, 2) == "~/" then
+			return HOME .. string.sub(dir, 2)
+		end
+	end
+	return dir
+end
+
 local function is_under(cwd: string?, path: string): boolean
-	return cwd ~= nil and (cwd == path or string.sub(cwd, 1, #path + 1) == path .. "/")
+	if cwd == nil then
+		return false
+	end
+	cwd, path = absolute_cwd(cwd), absolute_cwd(path)
+	return cwd == path or string.sub(cwd, 1, #path + 1) == path .. "/"
 end
 
 local INDEX_KEY = "worktreeIndex"
@@ -164,7 +181,23 @@ end
 
 -- The worktree index: each worktree in the worktree root by path, with its main checkout, branch and number of
 -- changed files. The host half reads it from kv to give the worktree variables to a new shell.
-local worktreeIndex = stored_index({})
+local worktreeIndex: { [string]: IndexEntry? } = {}
+local indexLoaded = false
+
+local function load_index()
+	if not indexLoaded then
+		indexLoaded = true
+		ROOT = remembered_root()
+		worktreeIndex = stored_index(worktreeIndex)
+	end
+end
+
+tern.timer(0, function()
+	if not indexLoaded then
+		load_index()
+		tern.chrome.refresh()
+	end
+end)
 -- The time when this window last set or deleted each entry. A `list --all` answer keeps the value of this window
 -- for each entry that changed at or after the time that the `list --all` started.
 local changedAt: { [string]: number } = {}
@@ -204,6 +237,7 @@ end
 
 -- Sets or deletes one entry. It reads kv again and changes only the entry of `path`.
 local function set_entry(path: string, entry: IndexEntry?)
+	load_index()
 	local merged = table.clone(stored_index(worktreeIndex))
 	merged[path] = entry
 	changedAt[path] = tern.now()
@@ -212,13 +246,16 @@ end
 
 -- The worktree index entry of `cwd` and its path: the longest index path that is `cwd` or a parent folder of it.
 local function index_lookup(cwd: string?): (string?, IndexEntry?)
-	local found: string? = nil
-	for path in pairs(worktreeIndex) do
-		if is_under(cwd, path) and (found == nil or #path > #found) then
-			found = path
+	load_index()
+	local path = if cwd ~= nil then without_trailing_slash(absolute_cwd(cwd)) else ""
+	while path ~= "" do
+		local entry = worktreeIndex[path]
+		if entry ~= nil then
+			return path, entry
 		end
+		path = string.match(path, "^(.*)/[^/]*$") or ""
 	end
-	return found, if found ~= nil then worktreeIndex[found] else nil
+	return nil, nil
 end
 
 -- The path of the managed worktree of `cwd`: the index path of `cwd` when its entry has owner `tern`.
@@ -1502,27 +1539,41 @@ local function register_rows(root: string, res: BranchesResult)
 	local name: string = if type(res.name) == "string" then res.name else basename(root)
 	local prefix = "wt-" .. fnv1a(root) .. "-"
 	local live: { [string]: true } = {}
-	for _, target in ipairs(branch_targets(res)) do
-		local id = prefix .. fnv1a(target.rowKey)
-		live[id] = true
-		tern.command({
-			id = id,
-			title = name .. ": " .. target.rowLabel,
-			icon = "branch",
-			group = "Worktrees",
-			available = function(cx: WindowCx): boolean
-				local rows = liveRowsOfRoot[root]
-				if rows == nil or rows[id] == nil then
-					return false
-				end
-				return focused_root(cx) == root
-			end,
-			run = function(cx: WindowCx)
-				create(cx, root, target.createArgs, target.branch, target.checkout)
-			end,
-		})
-	end
+	local targets = branch_targets(res)
+	local nextTarget = 1
 	liveRowsOfRoot[root] = live
+	local function register_batch()
+		if liveRowsOfRoot[root] ~= live then
+			return
+		end
+		local last = math.min(nextTarget + 7, #targets)
+		for i = nextTarget, last do
+			local target = targets[i]
+			local id = prefix .. fnv1a(target.rowKey)
+			live[id] = true
+			tern.command({
+				id = id,
+				title = name .. ": " .. target.rowLabel,
+				icon = "branch",
+				group = "Worktrees",
+				available = function(cx: WindowCx): boolean
+					local rows = liveRowsOfRoot[root]
+					if rows == nil or rows[id] == nil then
+						return false
+					end
+					return focused_root(cx) == root
+				end,
+				run = function(cx: WindowCx)
+					create(cx, root, target.createArgs, target.branch, target.checkout)
+				end,
+			})
+		end
+		nextTarget = last + 1
+		if nextTarget <= #targets then
+			tern.timer(0, register_batch)
+		end
+	end
+	tern.timer(0, register_batch)
 end
 
 local function fetch_interval_ms(cx: WindowCx): number
@@ -1967,13 +2018,17 @@ local function intercept(cx: WindowCx, tab: number?): boolean
 	return true
 end
 
-tern.command({
-	id = "new",
-	title = "New worktree tab",
-	icon = "branch",
-	keys = new_tab_keys(),
-	run = start,
-})
+tern.command({ id = "new", title = "New worktree tab", icon = "branch", run = start })
+
+tern.timer(0, function()
+	tern.command({
+		id = "new",
+		title = "New worktree tab",
+		icon = "branch",
+		keys = new_tab_keys(),
+		run = start,
+	})
+end)
 
 tern.command({
 	id = "from-issue",
@@ -1989,6 +2044,9 @@ tern.command({
 -- The worktree segment shows the branch and the number of changed files of the worktree of the focused pane. It
 -- reads only the worktree index.
 tern.chrome.status(function(pane: StatusPaneInfo): { StatusSegment }?
+	if not indexLoaded then
+		return nil
+	end
 	local _, entry = index_lookup(pane.cwd)
 	if entry == nil then
 		return nil
@@ -2075,7 +2133,27 @@ for _, name in ipairs({ "tab_created", "pane_created" }) do
 	end)
 end
 
-tern.on("cwd", function(ev: CwdEvent, cx: WindowCx)
+-- Coalesce bursts by pane; native inspection and process launch run with the next tick's fresh context.
+local function background_event<T>(name: string, handler: (ev: T, cx: WindowCx) -> ())
+	local pending: { [number]: T } = {}
+	tern.on(name, function(ev: any, _cx: WindowCx)
+		local pane = ev.pane
+		local queued = pending[pane] ~= nil
+		pending[pane] = ev
+		if queued then
+			return
+		end
+		tern.timer(0, function(cx: WindowCx?)
+			local latest = pending[pane]
+			pending[pane] = nil
+			if cx ~= nil and latest ~= nil then
+				handler(latest, cx)
+			end
+		end)
+	end)
+end
+
+background_event("cwd", function(ev: CwdEvent, cx: WindowCx)
 	refresh_managed(cx)
 	remember_cwd(ev.pane, ev.path)
 	if ev.pane == cx.session:focused() then
@@ -2087,7 +2165,7 @@ tern.on("cwd", function(ev: CwdEvent, cx: WindowCx)
 	end
 end)
 
-tern.on("focus", function(ev: FocusEvent, cx: WindowCx)
+background_event("focus", function(ev: FocusEvent, cx: WindowCx)
 	local pane = cx.session:pane(ev.pane)
 	if pane ~= nil then
 		remember_cwd(ev.pane, pane.cwd)
@@ -2100,7 +2178,7 @@ tern.on("focus", function(ev: FocusEvent, cx: WindowCx)
 	end
 end)
 
-tern.on("command_finished", function(ev: CommandFinishedEvent, cx: WindowCx)
+background_event("command_finished", function(ev: CommandFinishedEvent, cx: WindowCx)
 	local cwd: string? = cwdOfPane[ev.pane]
 	if cwd == nil then
 		local pane = cx.session:pane(ev.pane)

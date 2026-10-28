@@ -1,4 +1,4 @@
-import { parseArgs } from 'node:util';
+import { directoryArgs } from '../directory-args.ts';
 import { CliOutput } from '../cli-output.ts';
 import { worktreeRoot } from '../environment.ts';
 import { acquireHeavySlot, heavyStatus } from '../heavy.ts';
@@ -10,7 +10,7 @@ import { loadWorktreeConfig } from '../worktree-config.ts';
 /** Reports host slots, or runs a command in a host-wide heavy slot with the worktree environment. */
 export const run = async (args: string[]): Promise<HeavyStatus | CliOutput> => {
   const separator = args.indexOf('--');
-  const { values, positionals } = parseArgs({
+  const { values, positionals } = directoryArgs({
     allowPositionals: true,
     args: separator === -1 ? args : args.slice(0, separator),
     options: { repo: { type: 'string' }, status: { default: false, type: 'boolean' } },

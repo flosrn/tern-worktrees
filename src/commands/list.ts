@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
-import { parseArgs } from 'node:util';
+import { directoryArgs } from '../directory-args.ts';
 import { changedFileCount, checkoutAt, currentBranch, requireRepoRoot } from '../git.ts';
 import { worktreeOwner, worktreeRoot } from '../paths.ts';
 import type { WorktreeRoot } from '../paths.ts';
@@ -67,7 +67,7 @@ const readWorktree = async (root: WorktreeRoot, dir: string, all: boolean): Prom
  * With `--all`, it also lists the omp-owned worktrees. It does not look in a worktree or a main checkout.
  */
 export const run = async (args: string[]): Promise<ListResult> => {
-  const { all, repo } = parseArgs({ args, options: { all: { default: false, type: 'boolean' }, repo: { type: 'string' } } }).values;
+  const { all, repo } = directoryArgs({ args, options: { all: { default: false, type: 'boolean' }, repo: { type: 'string' } } }).values;
   const root = await worktreeRoot();
   const mainCheckout = repo === undefined ? null : await requireRepoRoot(repo);
   const startDir = mainCheckout === null || all ? root.dir : path.join(root.dir, path.basename(mainCheckout));

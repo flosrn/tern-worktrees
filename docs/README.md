@@ -60,6 +60,8 @@ omp clones the files of the main checkout, also the `.git` file of each submodul
 
 The window half knows each repository from the `cwd` of a pane. With `tern.command`, it registers one Tern command in the `Worktrees` group for each branch and each open pull request of that repository. A row runs `tern-wt create`, as the branch picker does. Its `available` hook only reads tables: the row shows when the `cwd` of the active pane belongs to its repository. A branch that goes away keeps its command, and `available` hides it. Tern ranks the rows, and the plugin sets only their titles.
 
+CLI directory operands and `--repo` accept `~` and `~/` paths. `resolve` keeps its input directory as the `dir` lookup key. The window compares home-relative pane directories with absolute worktree paths. It reads the saved index and hotkeys on the next tick, coalesces lifecycle refreshes by pane, and registers worktree rows in batches of eight. The status formatter reads memory only and finds an index entry through the directory's parents.
+
 Two types of refresh keep the rows current:
 
 - A local refresh runs `tern-wt branches --offline`. It keeps the pull request rows of the last network refresh.
