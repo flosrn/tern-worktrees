@@ -54,6 +54,8 @@ When the main checkout of the repository has the branch that you picked, the plu
 
 Each picker, prompt and confirmation of the plugin uses the Tern picker or the Tern prompt. In a picker, a path in your home folder starts with `~`.
 
+CLI directory arguments accept `~` and `~/` paths, also with `--repo`. `resolve` keeps the directory string as given in its `dir` field. The plugin compares home-relative pane directories with absolute worktree paths. Window load defers saved index and hotkey file reads to the next tick. Background directory, focus and command end events share deferred refreshes. Worktree rows register in batches of eight.
+
 ### Start work from an issue
 
 Select `From issue…` in the branch picker, or `New worktree from issue` in the command palette. Bind `plugin.tern-worktrees.from-issue` in Tern settings for a direct shortcut. The issue prompt starts with the clipboard text when it holds a GitHub issue URL. Paste the URL and press Enter, then edit or accept the suggested branch name in the second prompt. Pasting an issue URL into `New branch…` starts the same flow.

@@ -112,6 +112,17 @@ test("an agent's own cwd takes priority over another pane in its tab", function(
 	eq(plugin:pending("branches")[1], Stub.argv("branches", { repo = REPO }), "agent repository branches")
 end)
 
+test("a tilde-form agent cwd selects its repository instead of the session's first", function()
+	local cx = Stub.cx({ { pane = 1, tab = 1, cwd = "/r/first" }, { pane = 2, tab = 2, cwd = "" } }, 2)
+	cx.agentBlocks = { { pane = 2, cwd = "~/app", state = "idle" } }
+	local plugin = Stub.load({ env = Stub.ENV })
+	plugin:press(
+		cx,
+		'{"repos":[{"dir":"/r/first","root":"/r/first"},{"dir":"~/app","root":"/home/u/app","name":"app"}]}'
+	)
+	eq(plugin:pending("branches")[1], Stub.argv("branches", { repo = "/home/u/app" }), "tilde agent repository")
+end)
+
 test("a missing pane record uses tab_of to find the first cwd in its tab", function()
 	local cx = Stub.cx({
 		{ pane = 1, tab = 1, cwd = "/r/first" },

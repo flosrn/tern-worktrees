@@ -38,6 +38,7 @@ export type Options = {
 	files: { [string]: string }?,
 	kv: { [string]: any }?,
 	cx: any?,
+	autoTick: boolean?,
 }
 export type Harness = {
 	commands: { [string]: any },
@@ -564,6 +565,9 @@ function Stub.load(opts: Options): Harness
 			for _, run in self:take(verb) do
 				run:respond(stdout, status, answerCx, stderr)
 			end
+			if opts.autoTick ~= false then
+				self:tick(0)
+			end
 		end,
 		-- Removes the runs of `verb` that are pending and returns them, in the order they started.
 		take = function(self: Harness, verb: string): { Run }
@@ -577,6 +581,10 @@ function Stub.load(opts: Options): Harness
 		end,
 		-- Presses the new-worktree hotkey over `cx` and answers its `resolve` with `resolved` (default `Stub.RESOLVED`).
 		press = function(self: Harness, cx: any, resolved: string?)
+			if opts.autoTick ~= false then
+				self:tick(0)
+				self:answer("setup", '{"links":[]}', 0, cx)
+			end
 			self.commands.new.run(cx)
 			self:answer("resolve", resolved or Stub.RESOLVED, 0, cx)
 		end,
@@ -643,6 +651,9 @@ function Stub.load(opts: Options): Harness
 		-- Runs the status formatter for a focused pane in `cwd`. `tern.chrome.refresh` raises an error while the
 		-- formatter runs, as it does in Tern.
 		status = function(self: Harness, cwd: string?): any
+			if opts.autoTick ~= false then
+				self:tick(0)
+			end
 			local formatter = self.formatter
 			assert(formatter ~= nil, "no status formatter registered")
 			formatting = true
@@ -699,7 +710,14 @@ function Stub.load(opts: Options): Harness
 			loaded.overrides[name] = fn
 		end,
 		on = function(name: string, fn: (...any) -> ())
-			loaded.handlers[name] = fn
+			loaded.handlers[name] = function(...: any): ...any
+				defaultCx = select(select("#", ...), ...)
+				local result = table.pack(fn(...))
+				if opts.autoTick ~= false then
+					loaded:tick(0)
+				end
+				return table.unpack(result, 1, result.n)
+			end
 		end,
 		carly = {
 			export = function(name: string, _meta: any, fn: (...any) -> ...any)

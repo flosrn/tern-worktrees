@@ -15,6 +15,8 @@
 
 ### Fix
 
+- Expand `~` and `~/` in CLI directory arguments while keeping each `resolve` lookup key as given. Compare home-relative pane directories with absolute worktree index paths. Before, an agent directory that starts with `~/` resolved to no repository and selected the session's first repository
+- Defer worktree index and hotkey file reads until after window load. Coalesce directory, focus and command end refreshes on the next tick. Register worktree rows in batches of eight. Look up status entries through directory parents without a full worktree scan
 - Select the repository of an agent when the pane with the focus has no working directory. Without an agent directory, use the first known directory in its tab. Apply this rule to the branch picker, worktree rows and the issue palette command. Before, an omp chat pane could select the first repository of a different tab
 - Examine process working directories on macOS with `lsof` and parent relationships with `ps` for `clean`. Use the Linux protection rules for the caller, live sessions and shared infrastructure. Keep worktrees with an explicit cause when `lsof` is unavailable or fails. Before, all macOS worktrees stayed because process inspection required Linux `/proc`
 - Limit process inspection that is not full in `clean` to worktrees containing the process's known working directory. Identify process-related keep causes by PID and command, or state that inspection is unavailable. Before, one process that could not be examined kept all worktrees. Keep worktrees when process or Tern inspection is unavailable. Branch cleanup can still continue

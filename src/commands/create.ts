@@ -1,7 +1,7 @@
 import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { parseArgs } from 'node:util';
+import { directoryArgs } from '../directory-args.ts';
 import { chooseIssueBranch, readIssue, recordIssue, resolveIssue } from '../create-issue.ts';
 import type { CreatedIssue, IssueData, IssueInput, SuggestedIssue } from '../create-issue.ts';
 import { setupLine } from '../create-setup.ts';
@@ -119,7 +119,7 @@ interface CheckedOptions {
 const badArgs = (message: string): CliError => new CliError('bad_args', message);
 
 const parse = (args: string[]): Options =>
-  parseArgs({
+  directoryArgs({
     args,
     options: {
       'branch': { type: 'string' },

@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { parseArgs } from 'node:util';
+import { directoryArgs } from '../directory-args.ts';
 import { fetchOrigin, gitMust, requireRepoRoot, worktrees } from '../git.ts';
 import { defaultBranch, listPullRequests, readOrigin } from '../github.ts';
 import { worktreeOwner, worktreeRoot } from '../paths.ts';
@@ -70,7 +70,7 @@ const openPullRequests = async (repoRef: GithubRepoRef, warnings: string[]): Pro
 
 /** `branches --repo <dir> [--offline]`: the branches, open pull requests and worktrees of the repository that holds `dir`. `--offline` reads only local refs: no fetch and no pull requests. */
 export const run = async (args: string[]): Promise<BranchesResult> => {
-  const { values } = parseArgs({ args, options: { offline: { default: false, type: 'boolean' }, repo: { type: 'string' } } });
+  const { values } = directoryArgs({ args, options: { offline: { default: false, type: 'boolean' }, repo: { type: 'string' } } });
   if (values.repo === undefined) {
     throw new CliError('bad_args', 'branches needs --repo <dir>');
   }

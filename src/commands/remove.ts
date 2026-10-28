@@ -1,6 +1,6 @@
 import { existsSync, realpathSync, rmSync } from 'node:fs';
 import path from 'node:path';
-import { parseArgs } from 'node:util';
+import { directoryArgs } from '../directory-args.ts';
 import { loadConfig } from '../config.ts';
 import type { Teardown } from '../config.ts';
 import { currentBranch, fetchOrigin, gitMust, gitRun, requireCheckoutAt } from '../git.ts';
@@ -39,7 +39,7 @@ interface Context {
 }
 
 const parse = (args: string[]): Options => {
-  const parsed = parseArgs({
+  const parsed = directoryArgs({
     allowPositionals: true,
     args,
     options: { 'close-busy-tabs': { default: false, type: 'boolean' }, 'force': { default: false, type: 'boolean' }, 'keep-tab': { default: false, type: 'boolean' } },

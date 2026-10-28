@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { beforeEach, describe, expect, it } from 'vite-plus/test';
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { run } from '../src/commands/resolve.ts';
 import { cliJson, contract, git, logGitCalls, readLog, tempDir, tmpRepo, useSandbox } from './helpers.ts';
 
@@ -31,6 +31,28 @@ describe('resolve command', () => {
       const repo = await tmpRepo('app');
       await git(repo.dir, 'remote', 'set-url', 'origin', 'https://github.com/Acme/App.git');
       await expect(run([repo.dir])).resolves.toMatchObject({ repos: [{ origin: 'acme/app', owner: 'Acme' }] });
+    });
+
+    it('resolves a tilde directory without changing the lookup key', async () => {
+      const repo = await tmpRepo('app');
+      vi.stubEnv('HOME', path.dirname(repo.dir));
+      await expect(cliJson(['resolve', '~/app'])).resolves.toMatchObject({ repos: [{ dir: '~/app', root: repo.dir }] });
+    });
+
+    it('accepts a bare home directory and a home-relative repo option', async () => {
+      const repo = await tmpRepo('app');
+      vi.stubEnv('HOME', repo.dir);
+      await expect(cliJson(['resolve', '~'])).resolves.toMatchObject({ repos: [{ dir: '~', root: repo.dir }] });
+      await expect(cliJson(['branches', '--repo=~', '--offline'])).resolves.toMatchObject({ repo: repo.dir });
+    });
+
+    it('expands paths for prepare, env, remove and clean', async () => {
+      const repo = await tmpRepo('app');
+      vi.stubEnv('HOME', path.dirname(repo.dir));
+      await expect(cliJson(['prepare', '~/app', '--no-setup'])).resolves.toMatchObject({ path: repo.dir });
+      await expect(cliJson(['env', '~/app'])).resolves.toMatchObject({ env: {} });
+      await expect(cliJson(['remove', '~/app', '--keep-tab'])).resolves.toMatchObject({ error: { code: 'not_managed' } });
+      await expect(cliJson(['clean', '--repo', '~/app'])).resolves.toMatchObject({ repo: repo.dir });
     });
 
     it('answers resolve through the CLI main function with the contract fixture', async () => {

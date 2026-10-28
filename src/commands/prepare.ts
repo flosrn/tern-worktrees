@@ -1,4 +1,4 @@
-import { parseArgs } from 'node:util';
+import { directoryArgs } from '../directory-args.ts';
 import { loadConfig, setupCommands } from '../config.ts';
 import { worktreeRoot } from '../environment.ts';
 import { readOrigin } from '../github.ts';
@@ -9,7 +9,7 @@ import { loadWorktreeConfig } from '../worktree-config.ts';
 
 /** Starts shared services, then runs repository and user setup in order. */
 export const run = async (args: string[]): Promise<object> => {
-  const { positionals, values } = parseArgs({ allowPositionals: true, args, options: { 'no-setup': { type: 'boolean' } } });
+  const { positionals, values } = directoryArgs({ allowPositionals: true, args, options: { 'no-setup': { type: 'boolean' } } });
   if (positionals.length !== 1) {
     throw new CliError('bad_args', 'prepare requires one worktree path');
   }

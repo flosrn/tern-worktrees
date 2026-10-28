@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
-import { parseArgs } from 'node:util';
+import { directoryArgs } from '../directory-args.ts';
 import { cleanLinks, cleanReachability } from '../clean-linked.ts';
 import type { CleanPlan, PlanContext, PlannedHeads, RemovalDetail } from '../clean-plan.ts';
 import { inspectCleanItems } from '../clean-pool.ts';
@@ -452,7 +452,7 @@ const applyPlan = async (ctx: PlanContext): Promise<void> => {
 
 /** Plans repository-wide teardown without writes. Apply fetches and constructs a new plan. */
 export const run = async (args: string[]): Promise<CleanPlan> => {
-  const parsed = parseArgs({ args, options: { apply: { default: false, type: 'boolean' }, repo: { type: 'string' } } });
+  const parsed = directoryArgs({ args, options: { apply: { default: false, type: 'boolean' }, repo: { type: 'string' } } });
   if (parsed.values.repo === undefined) {
     throw new CliError('bad_args', 'clean needs --repo <dir>');
   }
