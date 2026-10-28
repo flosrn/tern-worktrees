@@ -73,6 +73,62 @@ test("the hotkey opens the focused pane's repository instead of the session's fi
 	)
 end)
 
+test("a focused pane without a cwd uses a repository in the same tab", function()
+	local cx = Stub.cx({
+		{ pane = 1, tab = 1, cwd = "/r/first" },
+		{ pane = 2, tab = 2, cwd = "" },
+		{ pane = 3, tab = 2, cwd = REPO },
+	}, 2)
+	local plugin = Stub.load({ env = Stub.ENV })
+	plugin:press(
+		cx,
+		'{"repos":[{"dir":"/r/first","root":"/r/first","name":"first"},{"dir":"/r/app","root":"/r/app","name":"app"}]}'
+	)
+	eq(plugin:pending("branches")[1], Stub.argv("branches", { repo = REPO }), "same-tab repository branches")
+	plugin:answer("branches", BRANCHES, 0, cx)
+	eq(cx.asked[1].opts.placeholder, "Search branches in app", "same-tab branch picker")
+	local row = nil
+	for _, spec in plugin.commands do
+		if spec.title == "app: x · worktree" then
+			row = spec
+		end
+	end
+	assert(row ~= nil, "same-tab worktree row registered")
+	eq(row.available(cx), true, "same-tab worktree row available")
+end)
+
+test("an agent's own cwd takes priority over another pane in its tab", function()
+	local cx = Stub.cx({
+		{ pane = 1, tab = 1, cwd = "/r/first" },
+		{ pane = 2, tab = 2 },
+		{ pane = 3, tab = 2, cwd = "/r/other" },
+	}, 2)
+	cx.agentBlocks = { { pane = 2, cwd = REPO, state = "idle" } }
+	local plugin = Stub.load({ env = Stub.ENV })
+	plugin:press(
+		cx,
+		'{"repos":[{"dir":"/r/first","root":"/r/first"},{"dir":"/r/other","root":"/r/other"},{"dir":"/r/app","root":"/r/app","name":"app"}]}'
+	)
+	eq(plugin:pending("branches")[1], Stub.argv("branches", { repo = REPO }), "agent repository branches")
+end)
+
+test("a missing pane record uses tab_of to find the first cwd in its tab", function()
+	local cx = Stub.cx({
+		{ pane = 1, tab = 1, cwd = "/r/first" },
+		{ pane = 3, tab = 2, cwd = REPO },
+		{ pane = 4, tab = 2, cwd = "/r/other" },
+	}, 2)
+	cx.session.tab_of = function(_self: any, id: number): number?
+		return if id == 2 then 2 else nil
+	end
+	local plugin = Stub.load({ env = Stub.ENV })
+	plugin:press(
+		cx,
+		'{"repos":[{"dir":"/r/first","root":"/r/first"},{"dir":"/r/app","root":"/r/app","name":"app"},{"dir":"/r/other","root":"/r/other"}]}'
+	)
+	eq(plugin:pending("branches")[1], Stub.argv("branches", { repo = REPO }), "tab repository branches")
+end)
+
 test("a focused pane outside a repository falls back to the session's first repository", function()
 	local cx = Stub.cx({ { pane = 1, tab = 1, cwd = REPO }, { pane = 2, tab = 2, cwd = "/outside" } }, 2)
 	local plugin = Stub.load({ env = Stub.ENV })
@@ -570,10 +626,19 @@ test("a PR URL offers Relocate and preserves its arguments", function()
 end)
 
 test("the issue palette command opens its prompt with current repository context", function()
-	local cx = Stub.cx({ { pane = 1, tab = 1, cwd = REPO } }, 1)
+	local cx = Stub.cx({
+		{ pane = 1, tab = 1, cwd = "/r/first" },
+		{ pane = 2, tab = 2 },
+		{ pane = 3, tab = 2, cwd = REPO },
+	}, 2)
 	local plugin = Stub.load({ env = Stub.ENV })
 	plugin.commands["from-issue"].run(cx)
-	plugin:answer("resolve", Stub.RESOLVED, 0, cx)
+	plugin:answer(
+		"resolve",
+		'{"repos":[{"dir":"/r/first","root":"/r/first"},{"dir":"/r/app","root":"/r/app","name":"app","origin":"acme/app"}]}',
+		0,
+		cx
+	)
 	local paste = table.remove(plugin.runs, 1)
 	assert(paste ~= nil, "clipboard read pending")
 	paste:respond("", 0, cx)

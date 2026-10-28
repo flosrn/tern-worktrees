@@ -249,6 +249,11 @@ function Stub.cx(panes: { Pane }, focused: number?, opts: CxOptions?): any
 				return settings[key]
 			end,
 		},
+		agents = {
+			list = function(_self: any): { any }
+				return cx.agentBlocks or {}
+			end,
+		},
 		session = {
 			panes = function(_self: any): { Pane }
 				return panes

@@ -15,6 +15,7 @@
 
 ### Fix
 
+- Select the repository of an agent when the pane with the focus has no working directory. Without an agent directory, use the first known directory in its tab. Apply this rule to the branch picker, worktree rows and the issue palette command. Before, an omp chat pane could select the first repository of a different tab
 - Examine process working directories on macOS with `lsof` and parent relationships with `ps` for `clean`. Use the Linux protection rules for the caller, live sessions and shared infrastructure. Keep worktrees with an explicit cause when `lsof` is unavailable or fails. Before, all macOS worktrees stayed because process inspection required Linux `/proc`
 - Limit process inspection that is not full in `clean` to worktrees containing the process's known working directory. Identify process-related keep causes by PID and command, or state that inspection is unavailable. Before, one process that could not be examined kept all worktrees. Keep worktrees when process or Tern inspection is unavailable. Branch cleanup can still continue
 - Treat ignored Python tool caches, virtual environments and TypeScript build info as output that tools make again. Before, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `__pycache__`, `.venv` and `*.tsbuildinfo` stopped worktree removal without `--force`, and Relocate copied them into the worktree it made again

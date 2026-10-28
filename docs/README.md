@@ -109,7 +109,7 @@ Agents use `create --issue <url>` when the work has an issue. This also applies 
 
 ### Pickers and sessions
 
-When the hotkey runs, the window half sends the working directory of each pane to `tern-wt resolve`, which gives the repository root of each one. The branch picker opens for the repository of the pane with the focus. When that pane is in no repository, it uses the first repository in pane order of the current session's tabs. When the session has no repository, the repo picker opens. When `resolve` fails, the picker still opens. When the root of a repository is unknown, that repository matches no session.
+When the hotkey runs, the window half sends the working directory of each pane to `tern-wt resolve`, which gives the repository root of each one. The branch picker opens for the repository of the pane with the focus. When the pane has no working directory, use the matching `AgentBlock.cwd` from `cx.agents:list()`. Without an agent directory, use the first known working directory in the same tab. Resolve an agent directory too when the pane list does not include it. When that directory is in no repository, use the first repository in pane order of the current session's tabs. The issue palette command uses the same rule, and worktree rows show for the repository of the pane with the focus. When the session has no repository, the repo picker opens. When `resolve` fails, the picker still opens. When the root of a repository is unknown, that repository matches no session.
 
 A new worktree tab opens in the repository session, or in a new session when the repository has none. The window half looks at all the panes in the tabs of each session, not only the first pane. It selects the repository session in this order:
 
