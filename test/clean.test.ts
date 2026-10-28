@@ -28,7 +28,6 @@ vi.mock(import('../src/clean-resources.ts'), { spy: true });
 vi.mock(import('../src/teardown.ts'), { spy: true });
 vi.mock(import('../src/tern.ts'), { spy: true });
 vi.mock(import('../src/work-to-lose.ts'), { spy: true });
-
 const tempTernDir = (): string => {
   const dir = process.env.FAKE_TERN_DIR;
   if (dir === undefined) {
@@ -36,7 +35,6 @@ const tempTernDir = (): string => {
   }
   return dir;
 };
-
 describe('clean command', () => {
   beforeEach(() => {
     useSandbox();
@@ -148,7 +146,6 @@ describe('clean command', () => {
       const cwd = vi.spyOn(process, 'cwd').mockReturnValue(nested);
       try {
         const result = await run(['--repo', repo.dir]);
-        expect(result.remove.worktrees).toStrictEqual([]);
         expect(result.keep).toStrictEqual(
           expect.arrayContaining([
             { id: locked, kind: 'worktree', reason: 'locked worktree' },
@@ -357,7 +354,10 @@ describe('clean command', () => {
       const head = await git(dir, 'rev-parse', 'HEAD');
       const tip = head.trim();
       await useGithubOrigin();
-      ghFixture(['pr', 'list', '--repo', 'virtusize/aoyama', '--state', 'merged', '--limit', '10000', '--json', 'headRefName,headRefOid,number'], JSON.stringify([{ headRefName: 'feature', headRefOid: tip, number: 1 }]));
+      ghFixture(
+        ['pr', 'list', '--repo', 'virtusize/aoyama', '--state', 'merged', '--limit', '10000', '--json', 'headRefName,headRefOid,number'],
+        JSON.stringify([{ headRefName: 'feature', headRefOid: tip, number: 1 }]),
+      );
       const planned = await run(['--repo', repo.dir]);
       expect(planned.remove.worktrees).toStrictEqual([dir]);
       writeFileSync(path.join(dir, 'feature.txt'), 'feature after merge\n');

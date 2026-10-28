@@ -4,6 +4,7 @@
 
 ### Feature
 
+- Add `clean --repo <dir> [--apply]` with a read-only dry-run plan, causes for keeping resources and warnings. Tell agents to show the plan and get explicit approval before `--apply`, which fetches and prunes `origin` before building a new plan. Preserve work to lose, work on branches without proof of integration, the caller and live sessions, and resources without proof of ownership or safety. Prove branch integration through ancestry of `origin/<default>` or one merged pull request's head commit, or through `git merge-tree` when the default branch's tree stays unchanged. Read merged pull requests in one query for all branches. Let commits missing from remote branches go only with proof of integration. Scope Docker removal to attributable containers. Keep shared services and anonymous volumes, with no host-wide Docker or temporary-file sweep
 - Add optional `.tern/worktree.json` declarations for repository setup commands, shared Docker services, literal environment variables and `heavy.slotMemoryGb`. Add `prepare <path> [--no-setup]` to start services and run repository setup before user setup. Add `env <path> [--shell]` to return the environment as JSON or POSIX-quoted exports
 - Add `heavy [--repo <dir>] -- <command>` with host-wide memory-sized slots, stale-PID lock recovery, signal cleanup and child output and exit-code passthrough. Add `heavy --status` for slot ownership and host memory
 - Prepare services before opening a new worktree tab. Prefix its setup line with `eval "$(tern-wt env . --shell)"` when environment variables are declared. Run repository setup before user setup. Keep `--no-tab` free of service and tab side effects while returning the setup line. Add `worktree_config_invalid`, `setup_failed`, `service_failed` and `docker_missing` errors
@@ -12,6 +13,7 @@
 
 ### Fix
 
+- Limit process inspection that is not full in `clean` to worktrees containing the process's known working directory. Identify process-related keep causes by PID and command, or state that inspection is unavailable. Before, one process that could not be examined kept all worktrees. Keep worktrees when process or Tern inspection is unavailable. Branch cleanup can still continue
 - Treat ignored Python tool caches, virtual environments and TypeScript build info as output that tools make again. Before, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `__pycache__`, `.venv` and `*.tsbuildinfo` stopped worktree removal without `--force`, and Relocate copied them into the worktree it made again
 - Open the branch picker for the repository of the pane with the focus. This applies to the hotkey and the worktree segment. Before, the picker opened for the first repository of the session, so `New branch…` could make a worktree in the incorrect repository
 - Let a clean worktree go when its submodule release history is recorded in the main checkout. Before, a detached submodule at a release tag not held by remote branches gave `dirty_worktree`. The check stays local and still stops on a submodule commit recorded only in the worktree

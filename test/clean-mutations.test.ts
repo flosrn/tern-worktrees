@@ -101,6 +101,32 @@ describe('clean observable safety decisions', () => {
       expect(result.warnings).toStrictEqual(['process inspection unavailable']);
     });
 
+    it('keeps the first worktree reason while retaining every process detail', async () => {
+      const repo = await tmpRepo('app');
+      const extra = path.join(tempDir('outside'), 'resource-only');
+      const firstProcess = { id: '41', kind: 'process', reason: 'protected first process' };
+      const secondProcess = { id: '42', kind: 'process', reason: 'protected second process' };
+      const secondDetail = { id: '42', kind: 'process', reason: 'second process detail' };
+      vi.mocked(planResources).mockResolvedValue({
+        ...resources(),
+        keep: [
+          { id: repo.dir, kind: 'worktree', reason: 'first process protects main' },
+          firstProcess,
+          { id: repo.dir, kind: 'worktree', reason: 'second process protects main' },
+          secondProcess,
+          secondDetail,
+          { id: extra, kind: 'worktree', reason: 'first resource-only reason' },
+          { id: extra, kind: 'worktree', reason: 'second resource-only reason' },
+        ],
+      });
+      const result = await run(['--repo', repo.dir]);
+      expect(result.keep.filter(item => item.kind === 'worktree')).toStrictEqual([
+        { id: repo.dir, kind: 'worktree', reason: 'main checkout' },
+        { id: extra, kind: 'worktree', reason: 'first resource-only reason' },
+      ]);
+      expect(result.keep.filter(item => item.kind === 'process')).toStrictEqual([firstProcess, secondProcess, secondDetail]);
+    });
+
     it('passes only missing prunable worktrees to the resource boundary', async () => {
       const { dir, repo } = await linked();
       const missing = path.join(tempDir('outside'), 'missing');

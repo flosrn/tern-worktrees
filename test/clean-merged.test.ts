@@ -26,7 +26,8 @@ describe('clean integration proofs', () => {
     await git(repo.dir, 'branch', 'second-worker', 'worker');
     await git(worker, 'switch', '--quiet', '-c', 'integration');
     await commitFile(worker, 'integration.txt', 'integration work\n');
-    const tip = (await git(worker, 'rev-parse', 'HEAD')).trim();
+    const head = await git(worker, 'rev-parse', 'HEAD');
+    const tip = head.trim();
     await git(worker, 'switch', '--quiet', 'worker');
     await useGithubOrigin();
     ghFixture(mergedQuery, JSON.stringify([{ headRefName: 'integration', headRefOid: tip, number: 17 }]));
@@ -67,7 +68,8 @@ describe('clean integration proofs', () => {
     await commitFile(worker, 'README.md', 'worker version\n');
     await commitFile(repo.dir, 'README.md', 'default version\n');
     await git(repo.dir, 'push', '--quiet', 'origin', 'main');
-    const tree = (await git(repo.dir, 'rev-parse', 'origin/main^{tree}')).trim();
+    const defaultTree = await git(repo.dir, 'rev-parse', 'origin/main^{tree}');
+    const tree = defaultTree.trim();
     await gitShim(`case " $* " in *" merge-tree --write-tree "*) printf '%s\\n' '${tree}'; exit 1;; esac`);
     const result = await run(['--repo', repo.dir]);
     expect(result.remove.branches).toStrictEqual([]);

@@ -8,6 +8,7 @@ import type { Worktree } from '../git.ts';
 import { defaultBranch, listPullRequests, readOrigin } from '../github.ts';
 import { isUnder } from '../paths.ts';
 import { CliError } from '../proc.ts';
+import type { GithubRepoRef } from '../repo-ref.ts';
 import { guardBusyTabs, isCleanMerged } from '../teardown.ts';
 import { blocksUnder, close, ls } from '../tern.ts';
 import type { PlacedBlock, TernListing } from '../tern.ts';
@@ -44,7 +45,6 @@ interface PlanContext {
   cwd: string;
   safeBranches: Set<string>;
   branchReasons: Map<string, string>;
-  mergedBranches: Set<string>;
   mergedHeads: string[];
   defaultTree: string | null;
 }
@@ -67,7 +67,6 @@ const branchReason = async (ctx: PlanContext, branch: string): Promise<string | 
     return 'default branch';
   }
   if (await isCleanMerged(result.repo, branch, result.default, ctx.mergedHeads, ctx.defaultTree)) {
-    ctx.mergedBranches.add(branch);
     return null;
   }
   return 'not merged';
@@ -117,7 +116,7 @@ const retainedWorktreeReason = async (ctx: PlanContext, entry: Worktree): Promis
   if (reason !== undefined) {
     return reason;
   }
-  return ctx.mergedBranches.has(entry.branch) ? null : 'not merged';
+  return null;
 };
 
 const worktreeReason = async (ctx: PlanContext, entry: Worktree): Promise<string | null> => {
@@ -176,6 +175,22 @@ const selectBranches = (ctx: PlanContext): void => {
   }
 };
 
+const mergedPrHeads = async (github: GithubRepoRef | null, warnings: string[]): Promise<string[]> => {
+  if (github === null) {
+    return [];
+  }
+  try {
+    const { error, prs } = await listPullRequests(github, ['--state', 'merged', '--limit', '10000'], ['headRefName', 'headRefOid', 'number']);
+    if (error === null) {
+      return [...new Set(prs.map(pr => pr.headRefOid))];
+    }
+    warnings.push(`merged PR check failed: ${error}`);
+  } catch (error) {
+    warnings.push(`merged PR check failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return [];
+};
+
 const plan = async (repo: string): Promise<{ result: CleanPlan; listing: TernListing | null; heads: PlannedHeads }> => {
   const origin = await readOrigin(repo);
   const base = await defaultBranch(repo, origin.github);
@@ -191,19 +206,7 @@ const plan = async (repo: string): Promise<{ result: CleanPlan; listing: TernLis
     warnings: [],
   };
   const heads: PlannedHeads = { branches: new Map(), worktrees: new Map(entries.map(entry => [entry.path, entry.head])) };
-  let mergedHeads: string[] = [];
-  if (origin.github !== null) {
-    try {
-      const { error, prs } = await listPullRequests(origin.github, ['--state', 'merged', '--limit', '10000'], ['headRefName', 'headRefOid', 'number']);
-      if (error === null) {
-        mergedHeads = [...new Set(prs.map(pr => pr.headRefOid))];
-      } else {
-        result.warnings.push(`merged PR check failed: ${error}`);
-      }
-    } catch (error) {
-      result.warnings.push(`merged PR check failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
+  const mergedHeads = await mergedPrHeads(origin.github, result.warnings);
   const defaultTree = await gitRun(repo, 'rev-parse', `origin/${base}^{tree}`);
   let listing: TernListing | null = null;
   try {
@@ -214,12 +217,11 @@ const plan = async (repo: string): Promise<{ result: CleanPlan; listing: TernLis
   const ctx: PlanContext = {
     branchReasons: new Map(),
     cwd: realpathSync(process.cwd()),
+    defaultTree: defaultTree.status === 0 ? defaultTree.stdout.trim() : null,
     entries,
     heads,
     listing,
-    mergedBranches: new Set(),
     mergedHeads,
-    defaultTree: defaultTree.status === 0 ? defaultTree.stdout.trim() : null,
     paths,
     prunableWorktrees,
     resources,
@@ -243,7 +245,11 @@ const plan = async (repo: string): Promise<{ result: CleanPlan; listing: TernLis
   result.remove.processes = selected.processes;
   result.remove.containers = selected.containers;
   result.remove.paths = selected.paths;
-  result.keep.push(...selected.keep);
+  for (const kept of selected.keep) {
+    if (kept.kind !== 'worktree' || !result.keep.some(existing => existing.kind === 'worktree' && existing.id === kept.id)) {
+      result.keep.push(kept);
+    }
+  }
   result.warnings.push(...selected.warnings);
   return { heads, listing, result };
 };

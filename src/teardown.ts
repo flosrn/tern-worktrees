@@ -68,7 +68,7 @@ export const isCleanMerged = async (root: string, branch: string, base: string, 
     return true;
   }
   for (const head of mergedHeads) {
-    // Stop at the first proof rather than spawning a git process for every remaining PR.
+    // Stop at the first proof.
     // eslint-disable-next-line no-await-in-loop
     if (await isAncestor(root, ref, head)) {
       return true;
