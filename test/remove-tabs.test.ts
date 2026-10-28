@@ -108,6 +108,21 @@ describe('remove command', () => {
       expect(ternLog().slice(1).toSorted()).toStrictEqual(['process 1 --json', 'process 2 --json', 'process 3 --json']);
     });
 
+    it('reports only the busy block when another block has no child or foreground process', async () => {
+      const dir = await addFeature();
+      writeTernLs({ work: [dir, path.join(dir, 'src')] });
+      writeProcess(1, null, null);
+      writeProcess(2, busyProcess);
+      const log = await logGitCalls();
+      await expect(cliJson(['remove', dir])).resolves.toMatchObject({
+        error: { blocks: [{ block: 2, process: busyProcess, session: 1, tab: 2 }], code: 'busy_tabs' },
+      });
+      expect(existsSync(dir)).toBeTruthy();
+      await expect(git(repo.dir, 'rev-parse', '--verify', 'refs/heads/feature/x')).resolves.toMatch(/\S/u);
+      expect(readLog(log).join('\n')).not.toMatch(/worktree remove|branch -D/u);
+      expect({ first: ternLog()[0], rest: ternLog().slice(1).toSorted() }).toStrictEqual({ first: 'ls --json', rest: ['process 1 --json', 'process 2 --json'] });
+    });
+
     it('does not let --force discard work in a busy tab', async () => {
       const dir = await addFeature();
       writeTernLs({ work: [dir] });
@@ -209,6 +224,7 @@ describe('remove command', () => {
     });
 
     it.each([
+      { child: null, foreground: null, name: 'no child or foreground process' },
       { child: shell, foreground: null, name: 'no foreground process' },
       { child: busyProcess, foreground: null, name: 'a non-shell child without a foreground process' },
       { child: shell, foreground: shell, name: 'the child shell' },

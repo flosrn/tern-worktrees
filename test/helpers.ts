@@ -81,6 +81,8 @@ export const useSandbox = (): Sandbox => {
   writeFileSync(gitConfig, '');
   vi.stubEnv('TERN_WT_HOME', sandbox.wtHome);
   vi.stubEnv('TERN_PLUGIN_DATA', sandbox.pluginData);
+  vi.stubEnv('TERN_WT_PROC_ROOT', path.join(root, 'proc'));
+  mkdirSync(path.join(root, 'proc'));
   vi.stubEnv('TERN_CONFIG_DIR', sandbox.configDir);
   vi.stubEnv('TERN_BIN', path.join(FIXTURE_BIN, 'tern'));
   vi.stubEnv('FAKE_TERN_DIR', sandbox.ternDir);

@@ -269,6 +269,7 @@ tern-wt heavy --status           # Inspect slots and host memory
 - `env`: prints the declared repository environment as JSON, or POSIX-quoted exports with `--shell`.
 - `heavy`: runs a command with the repository environment and services in a host-wide slot, or reports slots and memory with `--status`.
 - `remove`: tears down a tern-managed worktree as the teardown policy says, and closes its tabs. Before removal it checks the target blocks for running processes. See the refusal and overrides below.
+- `clean --repo <dir> [--apply]`: plans repository-scoped removals without writing. Applies a new plan only with `--apply`. See [Plan repository cleanup](#plan-repository-cleanup) for approval, output and safety rules.
 - `list`: lists the tern-managed worktrees, each with its `owner` and its number of `changed` files. `--all` adds the omp-owned worktrees. When git cannot count the changes of a worktree, for example because a submodule has a broken `.git` file, `list` still shows that worktree and adds a warning.
 - `branches`: lists the branches, the open pull requests and the worktrees of a repository, with the owner of each worktree and `main` true for the main checkout. `--offline` reads only local refs, with no fetch and no pull requests.
 - `resolve`: gives the repository root, name, owner and GitHub origin of each directory. Each `repos[]` entry has `origin` as `<owner>/<repo>` in lowercase, or null when `origin` is not a GitHub URL or the directory is not in a repository.
@@ -292,6 +293,32 @@ The Carly `create` export has the signature `(repo: string, branch: string?, new
 By default, `remove` refuses busy blocks with `busy_tabs` before removal. `--close-busy-tabs` skips the process check with approval to close busy blocks, `--force` only discards work to lose, and `--keep-tab` skips all Tern inspection and keeps tabs open. Read the [remove rules](skills/tern-worktrees/SKILL.md#remove) for the idle-process rule, `error.blocks`, inspection failures and the limits of this snapshot check.
 
 The Carly `remove(path, force?, closeBusyTabs?)` export uses the process check by default. Set the third argument, `closeBusyTabs`, to `true` only with approval to close busy blocks. It passes `--close-busy-tabs` and skips process inspection. The second argument, `force`, passes `--force` and only discards work to lose.
+
+### Plan repository cleanup
+
+Start with a dry run:
+
+```sh
+tern-wt clean --repo /path/to/repo
+```
+
+The dry run writes nothing and does not fetch or prune refs. Read `remove`, `keep` and `warnings` before you select an action. Agents must show this plan and wait for an explicit yes from the user before applying it:
+
+```sh
+tern-wt clean --repo /path/to/repo --apply
+```
+
+`--apply` fetches and prunes `origin`, then builds a new plan. It does not replay the preview, so the plan can change as remote refs and live resources change.
+
+The JSON result is `{"repo", "default", "remove": {"worktrees": [], "branches": [], "processes": [], "containers": [], "paths": []}, "keep": [{"kind", "id", "reason"}], "warnings": []}`. `repo` is the main checkout and `default` is the default branch. The removal arrays contain strings. Only `processes` has objects, with the form `{"pid": number, "cwd": string, "command": string}`. `--apply` adds `"applied": true`. Read kept resources and warnings even when no removal is planned.
+
+The main checkout, the caller's worktree, a worktree that is the caller's working directory or an ancestor of it, live omp sessions and worktrees with work to lose stay. A live busy Tern block stays with its worktree. Work on branches without proof of integration stays too. Hard-to-rebuild files use the same protection as teardown. A copy with the same bytes in the main checkout does not block removal. When inspection cannot prove safety, the related resource stays.
+
+For `clean`, a branch is integrated when its tip is an ancestor of `origin/<default>` or one merged pull request's head commit. It also counts as integrated when `git merge-tree` shows that merging it into `origin/<default>` keeps that tree unchanged. `clean` reads merged pull requests in one query for all branches. Removing commits missing from remote branches needs one of these proofs.
+
+Process-related keep causes identify the PID and command, or state that inspection is unavailable. When process inspection is not full, the process keeps only a worktree that contains its known working directory. An unrelated process does not keep all worktrees. When process inspection is unavailable, as on hosts without Linux `/proc`, worktrees stay. Branch cleanup can still continue. When Tern inspection is unavailable, all worktrees stay with an explicit cause.
+
+Process removal is limited to attributable repository processes on Linux: processes in worktrees selected for removal, or proven orphans. The caller, its ancestors, live omp sessions and their descendants, and system services stay. A live busy Tern block is not a removal target: its worktree stays, and `clean` does not stop that block. Docker removal needs evidence tying a container exclusively to worktrees in the removal plan. `Testcontainers` containers also need an `org.testcontainers.sessionId` label, no other container with the same session label, and no live working directory below their source paths. Shared `tern-wt` services, unattributable containers, anonymous volumes and the rootless Docker daemon stay. `paths` contains only empty directories left at paths of Git worktree entries identified `prunable`. Their identity is examined again before removal. This command does not sweep temporary folders, staging copies, Docker images or volumes.
 
 ## Design and glossary
 

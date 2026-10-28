@@ -3,14 +3,12 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { loadConfig } from '../config.ts';
 import type { Teardown } from '../config.ts';
-import { currentBranch, fetchOrigin, gitMust, gitRun, isAncestor, requireCheckoutAt } from '../git.ts';
-import { defaultBranch, listPullRequests, readOrigin } from '../github.ts';
+import { currentBranch, fetchOrigin, gitMust, gitRun, requireCheckoutAt } from '../git.ts';
+import { defaultBranch, readOrigin } from '../github.ts';
 import { isUnder, worktreeOwner, worktreeRoot } from '../paths.ts';
 import { CliError } from '../proc.ts';
-import type { BusyBlock } from '../proc.ts';
-import type { GithubRepoRef } from '../repo-ref.ts';
-import { blocksUnder, close, ls, processOf } from '../tern.ts';
-import type { PlacedBlock } from '../tern.ts';
+import { blocksUnder, close, ls } from '../tern.ts';
+import { guardBusyTabs, isMerged as branchIsMerged } from '../teardown.ts';
 import { guardWorkToLose } from '../work-to-lose.ts';
 
 /** Why `remove` kept the branch: the teardown policy `worktree`, a branch that is not merged (also when the merge check failed), or a failed `git branch -D`. */
@@ -99,47 +97,6 @@ const closeBlocks = async (ctx: Context, blocks: number[]): Promise<number[]> =>
   return closed.filter(block => block !== null);
 };
 
-const IDLE_SHELLS = new Set(['sh', 'bash', 'zsh', 'fish', 'dash', 'ksh', 'tcsh', 'csh', 'nu', 'pwsh', 'powershell', 'cmd.exe']);
-
-const guardBusyTabs = async (blocks: PlacedBlock[]): Promise<void> => {
-  const snapshots = await Promise.all(blocks.map(async entry => ({ ...entry, snapshot: await processOf(entry.block.id) })));
-  const busy: BusyBlock[] = [];
-  const descriptions = [];
-  for (const {
-    block,
-    tab,
-    session,
-    snapshot: { child, foreground },
-  } of snapshots) {
-    if (foreground === null) {
-      continue;
-    }
-    const idleShell = child?.pid === foreground.pid && IDLE_SHELLS.has(child.name);
-    if (!idleShell) {
-      busy.push({ block: block.id, process: foreground, session: session.id, tab: tab.id });
-      descriptions.push(`${block.id} in tab ${JSON.stringify(tab.name)} (${foreground.argv.join(' ') || foreground.name})`);
-    }
-  }
-  if (busy.length > 0) {
-    throw new CliError('busy_tabs', `Foreground processes in blocks: ${descriptions.join(', ')}; use --close-busy-tabs to close them after the user agrees`, {
-      blocks: busy,
-    });
-  }
-};
-
-const hasMergedPullRequest = async (ctx: Context, repoRef: GithubRepoRef | null, branch: string): Promise<boolean> => {
-  if (repoRef === null) {
-    return false;
-  }
-  const { error, prs } = await listPullRequests(repoRef, [`--head=${branch}`, '--state', 'merged'], ['headRefOid']);
-  if (error !== null) {
-    ctx.warnings.push(`merged PR check failed: ${error}`);
-    return false;
-  }
-  const held = await Promise.all(prs.map(async pr => await isAncestor(ctx.root, `refs/heads/${branch}`, pr.headRefOid)));
-  return held.includes(true);
-};
-
 const isMerged = async (ctx: Context, branch: string): Promise<boolean> => {
   const fetchWarning = await fetchOrigin(ctx.root, false);
   if (fetchWarning !== null) {
@@ -147,7 +104,7 @@ const isMerged = async (ctx: Context, branch: string): Promise<boolean> => {
   }
   const origin = await readOrigin(ctx.root);
   const base = await defaultBranch(ctx.root, origin.github);
-  return (await isAncestor(ctx.root, `refs/heads/${branch}`, `origin/${base}`)) || (await hasMergedPullRequest(ctx, origin.github, branch));
+  return await branchIsMerged(ctx.root, branch, base, origin.github, ctx.warnings);
 };
 
 const applyPolicy = async (ctx: Context, teardown: Teardown, branch: string): Promise<BranchKept | null> => {

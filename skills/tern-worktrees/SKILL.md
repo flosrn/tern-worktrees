@@ -1,6 +1,6 @@
 ---
 name: tern-worktrees
-description: Use to create, list, relocate or tear down git worktrees as Tern tabs with tern-wt, prepare their repository environment, or run heavy commands in host-wide slots. Replaces Orca worktrees.
+description: Use to create, list, relocate or tear down git worktrees as Tern tabs with tern-wt, plan repository cleanup, prepare their repository environment, or run heavy commands in host-wide slots. Replaces Orca worktrees.
 ---
 
 # tern-worktrees
@@ -18,6 +18,8 @@ description: Use to create, list, relocate or tear down git worktrees as Tern ta
 - After `busy_tabs`, keep the process check on retry unless the user agrees to bypass it. Ask before retrying with `--keep-tab` too: it removes the worktree without examining running processes.
 - Tabs that `create` opens are yours to close (skill://tern-cli). `remove` closes them after the process check. `--close-busy-tabs` skips the check. `--keep-tab` skips the check and keeps the tabs open.
 - Do not run `omp worktree clear` without `--dry-run` first. With or without `--all`, it deletes each worktree that omp sees as orphaned, and omp can see a live tern-managed worktree as orphaned, for example with `worktree.useRelativePaths=true` or after the main checkout moved.
+- For repository cleanup, run `clean --repo <dir>` first and show the user its `remove`, `keep` and `warnings`. Run `clean --repo <dir> --apply` only after the user explicitly says yes to that plan. A request to examine or plan cleanup is not approval to apply it.
+- Treat `clean` as repository-scoped. Keep uncertain resources. Do not supplement it with host-wide Docker, volume or temporary-file pruning.
 
 ## Output
 
@@ -115,6 +117,27 @@ When a block in the list closes or its process ends before inspection, the inspe
 A worktree with a changed file, a new file that git does not track, a submodule commit not held by a remote branch or by the main checkout's committed submodule history, or an ignored file that is hard to rebuild gives `dirty_worktree` and stays. The submodule check uses local refs only: it trusts the commits recorded in `HEAD` of the main checkout and their ancestors, at each submodule depth, only when the two submodule object stores have the recorded commit: the main checkout and the worktree. Otherwise, only remote branches protect the commits. It needs no fetched tags or network access. A local tag alone, or a submodule commit recorded only in the worktree, does not protect a commit. `remove` checks for that work before git removes anything. A different refusal of git, for example for a locked worktree, gives `git_failed` with the message of git, and the worktree stays. An ignored file is build, install or tool output when a part of its path is `node_modules`, `dist`, `build`, `coverage`, `.DS_Store`, `.cache`, `.next`, `.nuxt`, `.output`, `.turbo`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `__pycache__` or `.venv`, or its filename ends with `.tsbuildinfo`. That output goes with the worktree. Each other ignored file, for example `.env`, is hard to rebuild. An ignored file with the same bytes as the file at the same path in the main checkout, or in the same submodule of the main checkout, is a copy and goes with the worktree. `--force` deletes all of them.
 
 Output: `{"removed", "repo", "branch", "branchDeleted", "branchKept", "closedBlocks", "warnings"}`. `repo` is the main checkout of the removed worktree. `branch` is null for a detached `HEAD`. `branchKept` tells why `remove` kept the branch: `policy` for the teardown policy `worktree`, `not_merged` for a branch that is not merged, also when the merge check failed, and `not_deleted` when `git branch -D` failed. It is null when `remove` deleted the branch, and for a detached `HEAD`. A branch that the policy keeps because it is not merged adds the warning `kept local branch <branch>: not merged`, and a failed delete adds `branch <branch> not deleted: <reason>`. That warning comes first in `warnings`.
+
+### `clean`
+
+`tern-wt clean --repo <dir> [--apply]`
+
+Without `--apply`, returns a dry-run plan without writing anything, fetching or pruning refs. Show the plan to the user before asking to apply it. With explicit approval, run the same command with `--apply`: it fetches and prunes `origin`, then builds a new plan rather than replaying the dry run. The new plan can be different from the preview.
+
+Output: `{"repo", "default", "remove": {"worktrees": [], "branches": [], "processes": [], "containers": [], "paths": []}, "keep": [{"kind", "id", "reason"}], "warnings": []}`, plus `"applied": true` with `--apply`.
+
+- `repo`: the main checkout. `default`: the default branch.
+- `remove.worktrees`, `remove.branches`, `remove.containers` and `remove.paths`: arrays of strings identifying the planned removals.
+- `remove.processes`: `[{"pid", "cwd", "command"}]`, with a numeric process ID and strings for the working directory and command.
+- `keep`: kept resources and the cause for each decision. Read this alongside `warnings`. An empty removal list does not prove that the repository has no resources that are not used.
+
+Keeps the main checkout, the caller's worktree, a worktree that is the caller's working directory or an ancestor of it, live omp sessions, worktrees with work to lose, worktrees with a live busy Tern block, and work on branches without proof of integration. A live busy Tern block stays with its worktree. Hard-to-rebuild files follow the teardown rule: a copy with the same bytes in the main checkout does not block removal. When inspection cannot prove safety, the related resource stays. This is not `remove --force` and has no override to discard work.
+
+For `clean`, a branch is integrated when its tip is an ancestor of `origin/<default>` or one merged pull request's head commit. It also counts as integrated when `git merge-tree` shows that merging it into `origin/<default>` keeps that tree unchanged. `clean` reads merged pull requests in one query for all branches. Removing commits missing from remote branches needs one of these proofs.
+
+Process-related keep causes identify the PID and command, or state that inspection is unavailable. When process inspection is not full, the process keeps only a worktree that contains its known working directory. An unrelated process does not keep all worktrees. When process inspection is unavailable, as on hosts without Linux `/proc`, worktrees stay. Branch cleanup can still continue. When Tern inspection is unavailable, all worktrees stay with an explicit cause.
+
+Process removal is Linux-only and needs repository attribution: a process must be in a worktree selected for removal or be a proven orphan. The caller and its ancestors, live omp sessions and their descendants, system services and the rootless Docker daemon stay. `clean` does not stop a live busy Tern block. That block keeps its worktree. Containers need evidence tying them exclusively to worktrees in `remove.worktrees`. `Testcontainers` containers also need an `org.testcontainers.sessionId` label, no other container with the same session label, and no live working directory below their source paths. Shared `tern-wt` services and unattributable containers stay. Anonymous volumes are not removed. `paths` contains only empty directories left at paths of Git worktree entries identified `prunable`, with identity examined again before removal. Do not infer a temporary-file, staging-copy, Docker image or volume sweep from this field.
 
 ### `list`
 
