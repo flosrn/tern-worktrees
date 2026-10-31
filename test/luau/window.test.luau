@@ -200,7 +200,7 @@ local function setup_answer(bin: string, skill: string): string
 	local vars = {
 		binLink = "/home/u/.local/bin/tern-wt",
 		binTarget = "/p/bin/tern-wt",
-		skillLink = "/home/u/.omp/agent/skills/tern-worktrees",
+		skillLink = "/home/u/.agents/skills/tern-worktrees",
 		skillTarget = "/p/skills/tern-worktrees",
 	}
 	return Stub.answer("setup", vars, function(answer: any)

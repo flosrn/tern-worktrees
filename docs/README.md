@@ -28,7 +28,9 @@ To find if a folder is the top folder of a checkout, `checkoutAt` in `src/git.ts
 
 ### The links of the CLI and the skill
 
-Tern 0.8.3 has no install hook, and the manifest has no field for a CLI or a skill. `tern plugin install` only copies the package into the plugin folder of Tern. Thus, each time the window half loads, it runs `tern-wt setup` from the plugin folder. `setup` links `~/.local/bin/tern-wt` and `~/.omp/agent/skills/tern-worktrees` to the real path of the package that it runs from. The user then installs with one command, with no checkout and no `ln -s`.
+Tern 0.8.3 has no install hook, and the manifest has no field for a CLI or a skill. `tern plugin install` only copies the package into the plugin folder of Tern. Thus, each time the window half loads, it runs `tern-wt setup` from the plugin folder. `setup` links `~/.local/bin/tern-wt` and `~/.agents/skills/tern-worktrees` to the real path of the package that it runs from. The user then installs with one command, with no checkout and no `ln -s`.
+
+After checking the new links, `setup` removes the previous `~/.omp/agent/skills/tern-worktrees` link only when it points to `skills/tern-worktrees` in a package with the `package.json` name `tern-worktrees`. Real folders, unrelated links and targets that cannot be identified stay unchanged. The `links` list reports a removed link with its previous target and action `removed`.
 
 The window half loads when a window starts, and also when `tern plugin install`, `tern plugin reload` or a change in a linked plugin folder loads the plugin again in an open window. In a sandbox on Tern 0.8.3, an install into an open window sent no `window_start` event, so a `window_start` handler made no links until the next window. A load has a budget of 50 ms, and Tern disables a plugin that goes over it until the next reload. Thus the load only starts a 0 ms timer, and the timer starts `setup`. The load does not start a process or wait for one.
 
