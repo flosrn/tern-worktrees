@@ -1,11 +1,12 @@
-import { accessSync, constants, lstatSync, mkdirSync, readlinkSync, realpathSync, statSync, symlinkSync, unlinkSync } from 'node:fs';
+import { accessSync, constants, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, statSync, symlinkSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
+import { isJsonObject } from '../json.ts';
 import { userHome } from '../paths.ts';
 import { CliError } from '../proc.ts';
 
 /** What `setup` did to a symbolic link. */
-export type LinkAction = 'created' | 'kept' | 'replaced';
+export type LinkAction = 'created' | 'kept' | 'replaced' | 'removed';
 
 /** A symbolic link that `setup` manages, its target and what `setup` did to it. */
 export interface SetupLink {
@@ -18,6 +19,8 @@ export interface SetupLink {
 export interface SetupResult {
   links: SetupLink[];
 }
+
+const PACKAGE_NAME = 'tern-worktrees';
 
 const conflict = (target: string, reason: string): CliError => new CliError('path_conflict', `${target} ${reason}`, { path: target });
 
@@ -98,8 +101,27 @@ const applyLink = (planned: PlannedLink): SetupLink => {
   });
 };
 
+/** Only migrates links to the bundled skill of a tern-worktrees package. */
+const legacyLink = (home: string): PlannedLink | null => {
+  const link = path.join(home, '.omp', 'agent', 'skills', PACKAGE_NAME);
+  try {
+    if (!lstatSync(link).isSymbolicLink()) {
+      return null;
+    }
+    const target = readlinkSync(link);
+    const resolved = path.resolve(path.dirname(link), target);
+    if (path.basename(resolved) !== PACKAGE_NAME || path.basename(path.dirname(resolved)) !== 'skills') {
+      return null;
+    }
+    const manifest: unknown = JSON.parse(readFileSync(path.join(resolved, '..', '..', 'package.json'), 'utf-8'));
+    return isJsonObject(manifest) && 'name' in manifest && manifest.name === PACKAGE_NAME ? { path: link, target } : null;
+  } catch {
+    return null;
+  }
+};
+
 /**
- * `setup`: links `~/.local/bin/tern-wt` to the CLI and `~/.omp/agent/skills/tern-worktrees` to the skill of the package that it runs from.
+ * `setup`: links `~/.local/bin/tern-wt` to the CLI and `~/.agents/skills/tern-worktrees` to the skill of the package that it runs from.
  * It checks each link and its parent directories before it changes anything, so a `path_conflict` keeps the machine as it was. A second run changes nothing.
  */
 export const run = (args: string[]): SetupResult => {
@@ -108,7 +130,20 @@ export const run = (args: string[]): SetupResult => {
   const home = userHome();
   const links = [
     planLink(path.join(home, '.local', 'bin', 'tern-wt'), path.join(pkg, 'bin', 'tern-wt')),
-    planLink(path.join(home, '.omp', 'agent', 'skills', 'tern-worktrees'), path.join(pkg, 'skills', 'tern-worktrees')),
+    planLink(path.join(home, '.agents', 'skills', PACKAGE_NAME), path.join(pkg, 'skills', PACKAGE_NAME)),
   ];
-  return { links: links.map(applyLink) };
+  const legacy = legacyLink(home);
+  if (legacy) {
+    onDisk(path.dirname(legacy.path), () => {
+      accessSync(path.dirname(legacy.path), constants.W_OK);
+    });
+  }
+  const applied = links.map(applyLink);
+  if (legacy && legacyLink(home)?.target === legacy.target) {
+    onDisk(legacy.path, () => {
+      unlinkSync(legacy.path);
+    });
+    applied.push({ ...legacy, action: 'removed' });
+  }
+  return { links: applied };
 };

@@ -209,7 +209,7 @@ Output: the options file with each default filled in, `{"teardown", "cloneRoot",
 
 `tern-wt setup`
 
-Links `~/.local/bin/tern-wt` to the CLI and `~/.omp/agent/skills/tern-worktrees` to this skill, the two in the package that it runs from. The plugin runs it each time it loads in a Tern window. A second run changes nothing. Output: `{"links": [{"path", "target", "action"}]}`, with `action` `created`, `kept` or `replaced`. A file or a folder that is not a symbolic link at a link path gives `path_conflict`, and `setup` then changes nothing.
+Links `~/.local/bin/tern-wt` to the CLI and `~/.agents/skills/tern-worktrees` to this skill, the two in the package that it runs from. The plugin runs it each time it loads in a Tern window. A second run changes nothing. Output: `{"links": [{"path", "target", "action"}]}`, with `action` `created`, `kept`, `replaced` or `removed`. Removes the previous `~/.omp/agent/skills/tern-worktrees` symbolic link only when its target is the bundled skill of a package named `tern-worktrees`. Reports its previous target with action `removed`. Real folders and unrelated links stay unchanged. A file or a folder that is not a symbolic link at a new link path gives `path_conflict`, and `setup` then changes nothing.
 
 ## Error codes
 

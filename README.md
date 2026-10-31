@@ -21,7 +21,9 @@ Each tern-managed worktree lives in the worktree root, at `<root>/<repo>/<slug>`
 tern plugin install github.com/riicodespretty/tern-worktrees
 ```
 
-Each time Tern loads the plugin in a window, the plugin runs `tern-wt setup` from its installed copy: when the window starts, and when `tern plugin install` adds or updates the plugin in an open window. `setup` links `~/.local/bin/tern-wt` to the CLI and `~/.omp/agent/skills/tern-worktrees` to the skill, the two in that copy. When it makes or changes a link, the toast `Linked tern-wt and the tern-worktrees skill` shows. When the links are correct, no toast shows. When a file or a folder that is not a symbolic link is at a link path, `setup` changes nothing, and a `Setup failed: …` toast gives the path.
+Each time Tern loads the plugin in a window, the plugin runs `tern-wt setup` from its installed copy: when the window starts, and when `tern plugin install` adds or updates the plugin in an open window. `setup` links `~/.local/bin/tern-wt` to the CLI and `~/.agents/skills/tern-worktrees` to the skill, the two in that copy. When it makes or changes a link, the toast `Linked tern-wt and the tern-worktrees skill` shows. When the links are correct, no toast shows. When a file or a folder that is not a symbolic link is at a link path, `setup` changes nothing, and a `Setup failed: …` toast gives the path.
+
+`setup` also removes the previous `~/.omp/agent/skills/tern-worktrees` link when its target is the bundled skill of a package named `tern-worktrees`. It preserves real folders and links to other targets. The JSON `links` list reports that link and its target with action `removed`.
 
 Put `~/.local/bin` on your `PATH`, so that your shell and your agents find `tern-wt`.
 
@@ -35,7 +37,7 @@ To remove the plugin, remove it from Tern, then delete the two links:
 
 ```sh
 tern plugin remove tern-worktrees
-rm ~/.local/bin/tern-wt ~/.omp/agent/skills/tern-worktrees
+rm ~/.local/bin/tern-wt ~/.agents/skills/tern-worktrees
 ```
 
 ## Usage

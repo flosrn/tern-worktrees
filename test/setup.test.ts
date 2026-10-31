@@ -68,25 +68,25 @@ const expectPathConflict = (blocked: string, message: string): void => {
 
 const PARENT_BLOCKERS: [string, () => string, string][] = [
   [
-    'a dangling symbolic link at ~/.omp',
+    'a dangling symbolic link at ~/.agents',
     (): string => {
-      const omp = path.join(home, '.omp');
+      const omp = path.join(home, '.agents');
       symlinkSync(path.join(home, 'missing-omp'), omp);
       return omp;
     },
     'cannot be used: Error: ENOENT',
   ],
   [
-    'a symbolic link loop at ~/.omp',
+    'a symbolic link loop at ~/.agents',
     (): string => {
-      const omp = path.join(home, '.omp');
+      const omp = path.join(home, '.agents');
       symlinkSync(omp, omp);
       return omp;
     },
     'cannot be used: Error: ELOOP',
   ],
   [
-    'a regular file at ~/.omp/agent/skills',
+    'a regular file at ~/.agents/skills',
     (): string => {
       const skills = path.dirname(skillLink);
       mkdirSync(path.dirname(skills), { recursive: true });
@@ -194,13 +194,57 @@ const LINK_BLOCKERS: [string, () => string, (link: string) => void, (link: strin
   ],
 ];
 
+interface LegacyFixture {
+  kind: string;
+  parent?: string;
+  skill?: string;
+  manifest?: string | null;
+  packageLink?: boolean;
+}
+
+const LEGACY_FIXTURES: LegacyFixture[] = [
+  { kind: 'folder' },
+  { kind: 'file' },
+  { kind: 'unrelated', packageLink: true },
+  { kind: 'missing', manifest: null },
+  { kind: 'invalid', manifest: '{' },
+  { kind: 'wrong-package' },
+  { kind: 'wrong-skill', manifest: JSON.stringify({ name: 'tern-worktrees' }), skill: 'another-skill' },
+  { kind: 'wrong-parent', manifest: JSON.stringify({ name: 'tern-worktrees' }), parent: 'other' },
+  { kind: 'empty-manifest', manifest: '{}' },
+];
+
+const legacyLink = (): string => {
+  const link = path.join(home, '.omp', 'agent', 'skills', 'tern-worktrees');
+  mkdirSync(path.dirname(link), { recursive: true });
+  return link;
+};
+
+const makeLegacyFixture = (fixture: LegacyFixture): string => {
+  const link = legacyLink();
+  if (fixture.kind === 'folder') {
+    mkdirSync(link);
+  } else if (fixture.kind === 'file') {
+    writeFileSync(link, 'mine');
+  } else {
+    const pkg = tempDir('other-package');
+    const target = path.join(pkg, fixture.parent ?? 'skills', fixture.skill ?? 'tern-worktrees');
+    mkdirSync(target, { recursive: true });
+    if (fixture.manifest !== null) {
+      writeFileSync(path.join(pkg, 'package.json'), fixture.manifest ?? JSON.stringify({ name: 'other-package' }));
+    }
+    symlinkSync(fixture.packageLink === true ? pkg : target, link);
+  }
+  return link;
+};
+
 describe(setup, () => {
   beforeEach(() => {
     sandbox = useSandbox();
     home = tempDir('home');
     vi.stubEnv('HOME', home);
     binLink = path.join(home, '.local', 'bin', 'tern-wt');
-    skillLink = path.join(home, '.omp', 'agent', 'skills', 'tern-worktrees');
+    skillLink = path.join(home, '.agents', 'skills', 'tern-worktrees');
     race.before = noRace;
   });
 
@@ -216,6 +260,88 @@ describe(setup, () => {
     mkdirSync(path.join(sandbox.configDir, 'plugins', 'tern-worktrees'), { recursive: true });
     expect(setup([])).toStrictEqual({ links: expectedLinks('created') });
     expect([readlinkSync(binLink), readlinkSync(skillLink), ternLog()]).toStrictEqual([binTarget, skillTarget, []]);
+  });
+
+  describe('legacy skill migration', () => {
+    it('removes the old package skill link and reports its target', () => {
+      const oldLink = path.join(home, '.omp', 'agent', 'skills', 'tern-worktrees');
+      mkdirSync(path.dirname(oldLink), { recursive: true });
+      const target = path.relative(path.dirname(oldLink), skillTarget);
+      symlinkSync(target, oldLink);
+      expect(setup([])).toStrictEqual({ links: [...expectedLinks('created'), { action: 'removed', path: oldLink, target }] });
+      expect(isAbsent(oldLink)).toBeTruthy();
+      expect(setup([])).toStrictEqual({ links: expectedLinks('kept') });
+    });
+
+    it.each(LEGACY_FIXTURES)('preserves an old $kind instead of deleting user data', fixture => {
+      const oldLink = makeLegacyFixture(fixture);
+      expect(setup([])).toStrictEqual({ links: expectedLinks('created') });
+      expect(isAbsent(oldLink)).toBeFalsy();
+    });
+
+    it('leaves the old package link in place when a new path conflicts', () => {
+      const oldLink = path.join(home, '.omp', 'agent', 'skills', 'tern-worktrees');
+      mkdirSync(path.dirname(oldLink), { recursive: true });
+      symlinkSync(skillTarget, oldLink);
+      mkdirSync(skillLink, { recursive: true });
+      expectPathConflict(skillLink, NOT_A_SYMLINK);
+      expect(readlinkSync(oldLink)).toBe(skillTarget);
+      expect(isAbsent(binLink)).toBeTruthy();
+    });
+
+    it('checks removal permissions before creating either new link', () => {
+      const oldLink = path.join(home, '.omp', 'agent', 'skills', 'tern-worktrees');
+      mkdirSync(path.dirname(oldLink), { recursive: true });
+      symlinkSync(skillTarget, oldLink);
+      chmodSync(path.dirname(oldLink), 0o500);
+      try {
+        expectPathConflict(path.dirname(oldLink), 'EACCES');
+        expect(isAbsent(binLink)).toBeTruthy();
+        expect(isAbsent(skillLink)).toBeTruthy();
+      } finally {
+        chmodSync(path.dirname(oldLink), 0o700);
+      }
+      expect(readlinkSync(oldLink)).toBe(skillTarget);
+    });
+
+    it('preserves a legacy link replaced by a folder during setup', () => {
+      const oldLink = path.join(home, '.omp', 'agent', 'skills', 'tern-worktrees');
+      mkdirSync(path.dirname(oldLink), { recursive: true });
+      symlinkSync(skillTarget, oldLink);
+      raceOnce('symlinkSync', () => {
+        rmSync(oldLink);
+        mkdirSync(oldLink);
+      });
+      expect(setup([])).toStrictEqual({ links: expectedLinks('created') });
+      expect(lstatSync(oldLink).isDirectory()).toBeTruthy();
+    });
+
+    it('preserves a legacy link replaced by another symlink during setup', () => {
+      const oldLink = legacyLink();
+      symlinkSync(skillTarget, oldLink);
+      raceOnce('symlinkSync', () => {
+        rmSync(oldLink);
+        symlinkSync(OTHER_TARGET, oldLink);
+      });
+      expect(setup([])).toStrictEqual({ links: expectedLinks('created') });
+      expect(readlinkSync(oldLink)).toBe(OTHER_TARGET);
+    });
+
+    it('does not report removal of a legacy link deleted during setup', () => {
+      const oldLink = legacyLink();
+      symlinkSync(skillTarget, oldLink);
+      raceOnce('symlinkSync', () => {
+        rmSync(oldLink);
+      });
+      expect(setup([])).toStrictEqual({ links: expectedLinks('created') });
+      expect(isAbsent(oldLink)).toBeTruthy();
+    });
+  });
+
+  it('rejects arguments without creating links', () => {
+    expect(() => setup(['--unknown'])).toThrow('Unknown option');
+    expect(isAbsent(binLink)).toBeTruthy();
+    expect(isAbsent(skillLink)).toBeTruthy();
   });
 
   it('replaces a link to another target', () => {
@@ -282,8 +408,8 @@ describe(setup, () => {
 
   it('makes the links through a parent that is a symbolic link to a dir', () => {
     const realOmp = tempDir('omp');
-    symlinkSync(realOmp, path.join(home, '.omp'));
+    symlinkSync(realOmp, path.join(home, '.agents'));
     expect(setup([])).toStrictEqual({ links: expectedLinks('created') });
-    expect(readlinkSync(path.join(realOmp, 'agent', 'skills', 'tern-worktrees'))).toBe(skillTarget);
+    expect(readlinkSync(path.join(realOmp, 'skills', 'tern-worktrees'))).toBe(skillTarget);
   });
 });
