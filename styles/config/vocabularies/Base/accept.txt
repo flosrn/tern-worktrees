@@ -102,4 +102,6 @@ via
 [Aa]pplication
 [Aa]void
 omp
+ovnfs
+[Ss]ubagents?
 [Hh]otfix(?:es)?

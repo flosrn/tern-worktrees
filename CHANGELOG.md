@@ -12,6 +12,7 @@
 - Prepare services before opening a new worktree tab. Prefix its setup line with `eval "$(tern-wt env . --shell)"` when environment variables are declared. Run repository setup before user setup. Keep `--no-tab` free of service and tab side effects while returning the setup line. Add `worktree_config_invalid`, `setup_failed`, `service_failed` and `docker_missing` errors
 - Add `create --issue <url|#n>` to derive or reuse an issue branch, record `branch.<branch>.ternIssue`, and open its worktree tab. Support `--branch` overrides, read-only `--suggest`, pull request URLs and `not_cloned` with the clone path. Add `issueBranch.fixLabels` and opt-in `issueBranch.linkOnGitHub` for remote branch creation with `gh issue develop`. Tell agents to use `--issue` for issue work and `Closes <owner>/<repo>#<n>` in PR bodies. Before, agents invented branch names and recorded issue links by hand
 - Add `From issue…` to the branch picker and `New worktree from issue` to the palette, with the command `plugin.tern-worktrees.from-issue`. Pre-fill an issue prompt from the clipboard, let the user edit the derived branch name, and detect issue URLs in `New branch…`. Use a matching open repository session or offer to clone the repository. Before, users had to select a repository and invent the branch name to start from an issue
+- Tell agents to use `tern-wt` for branch worktrees and an ovnfs checkout for a throwaway isolated copy. Before, the skill sent all copies to `tern-wt`, and the omp prompt sent them to ovnfs
 
 ### Fix
 
