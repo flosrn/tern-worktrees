@@ -1,9 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { Hash } from 'node:crypto';
 import { closeSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readlinkSync, readSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import path from 'node:path';
-import { isUnder } from './paths.ts';
+import { isUnder, userHome } from './paths.ts';
 import { gitMust, submodules } from './git.ts';
 import { must } from './proc.ts';
 
@@ -138,7 +137,7 @@ interface RecoveryLocation {
 
 const recoveryDestination = (target: RecoveryTarget): RecoveryLocation => {
   const configured = process.env.XDG_STATE_HOME;
-  const state = configured === undefined || configured === '' ? path.join(homedir(), '.local', 'state') : configured;
+  const state = configured === undefined || configured === '' ? path.join(userHome(), '.local', 'state') : configured;
   const root = path.join(state, 'tern-wt', 'recovery');
   if (target.worktree !== null && isUnder(root, target.worktree)) {
     throw new Error('recovery directory must be outside the removed worktree');
