@@ -9,7 +9,8 @@ description: Use to create, list, relocate or tear down git worktrees as Tern ta
 
 ## Rules
 
-- Use `tern-wt` for worktrees, not `git worktree` or `orca worktree`.
+- Use `tern-wt` for a branch worktree, not `git worktree` or `orca worktree`. A branch worktree holds issue or pull request work, a pushed branch, a Tern tab or repository services.
+- Use an ovnfs checkout for a throwaway isolated copy, for example an experiment, when `ovnfs` is on `PATH`. Open it with `ovnfs new`, and merge it back with `ovnfs apply`. Run `ovnfs rm` on each checkout that you opened. omp gives each `isolated: true` subagent its own ovnfs checkout.
 - For work on an issue, use `tern-wt create --issue <url>` (or the plugin's `create` export with `issue`). This derives the branch and records `ternIssue`. Use `--branch --new` alone only for work with no issue.
 - Put `Closes <owner>/<repo>#<n>` in the PR body, or `Closes #<n>` when the issue is in the same repository.
 - Run `remove` only on a worktree you created in this session, or one the user names.
