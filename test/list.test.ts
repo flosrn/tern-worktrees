@@ -250,7 +250,8 @@ describe('list command with a worktree that git cannot read', () => {
     writeFileSync(path.join(broken, 'junk.txt'), 'x\n');
     const expected = {
       root: worktreeRootDir(),
-      warnings: [`changed files not counted in ${broken}: fatal: not a git repository: sub/../.git/modules/sub`],
+      // Git versions word this error differently. The warning gives the git message after the path.
+      warnings: [expect.stringContaining(`changed files not counted in ${broken}: fatal: `)],
       worktrees: [
         { branch: 'feature/x', changed: 0, dirty: false, owner: 'tern', path: clean, repo: repo.dir },
         { branch: 'feature/y', changed: 1, dirty: true, owner: 'tern', path: broken, repo: repo.dir },
