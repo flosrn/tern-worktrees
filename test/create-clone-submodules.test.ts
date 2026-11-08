@@ -2,7 +2,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vite-plus/test';
 import { run } from '../src/commands/create.ts';
-import { git, ignoreGlobally, managedPath, tempDir, tmpRepo, useOmp, useSandbox } from './helpers.ts';
+import { git, gitShim, ignoreGlobally, managedPath, tempDir, tmpRepo, useOmp, useSandbox } from './helpers.ts';
 import type { RepoFixture } from './helpers.ts';
 
 const WITH_FILE = ['-c', 'protocol.file.allow=always'];
@@ -58,6 +58,51 @@ describe('create command in omp clone mode with submodules', () => {
     expect(existsSync(path.join(targetGit.trim(), 'objects/info/alternates'))).toBeFalsy();
     rmSync(path.join(repo.dir, '.git/modules'), { recursive: true });
     await expect(Promise.all([git(targetSub, 'show', 'HEAD:README.md'), git(targetSub, 'rev-parse', 'HEAD')])).resolves.toStrictEqual(['test\n', recorded]);
+  });
+
+  it.each([false, true])('initializes from a shallow main submodule after its remote disappears, with a later source tip %j', async later => {
+    const sub = await tmpRepo('sub');
+    await git(repo.dir, ...WITH_FILE, 'submodule', '--quiet', 'add', '--depth', '1', `file://${sub.origin}`, 'lib/sub');
+    await git(repo.dir, 'config', '-f', '.gitmodules', 'submodule.lib/sub.shallow', 'true');
+    await git(repo.dir, 'add', '.gitmodules', 'lib/sub');
+    await git(repo.dir, 'commit', '--quiet', '-m', 'add shallow submodule');
+    await git(repo.dir, 'push', '--quiet', 'origin', 'HEAD:refs/heads/feature/x');
+    if (later) {
+      writeFileSync(path.join(mainSub, 'later.txt'), 'later\n');
+      await git(mainSub, 'add', 'later.txt');
+      await git(mainSub, 'commit', '--quiet', '-m', 'later local tip');
+    }
+    await expect(git(mainSub, 'rev-parse', '--is-shallow-repository')).resolves.toBe('true\n');
+    rmSync(sub.origin, { recursive: true });
+    await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab'])).resolves.toMatchObject({ warnings: [] });
+    const targetSub = path.join(managedPath('feature-x'), 'lib/sub');
+    const gitdir = await git(targetSub, 'rev-parse', '--absolute-git-dir');
+    expect(existsSync(path.join(gitdir.trim(), 'objects/info/alternates'))).toBeFalsy();
+    rmSync(path.join(repo.dir, '.git/modules'), { recursive: true });
+    await expect(Promise.all([git(targetSub, 'show', 'HEAD:README.md'), git(targetSub, 'remote', 'get-url', 'origin')])).resolves.toStrictEqual([
+      'test\n',
+      `file://${sub.origin}\n`,
+    ]);
+  });
+
+  it('warns when a shallow local SHA fetch fails and uses the original remote', async () => {
+    const sub = await tmpRepo('sub');
+    await git(repo.dir, 'config', '--global', 'protocol.file.allow', 'always');
+    await git(repo.dir, 'submodule', '--quiet', 'add', '--depth', '1', `file://${sub.origin}`, 'lib/sub');
+    await git(repo.dir, 'commit', '--quiet', '-m', 'add shallow submodule');
+    await git(repo.dir, 'push', '--quiet', 'origin', 'HEAD:refs/heads/feature/x');
+    writeFileSync(path.join(mainSub, 'later.txt'), 'later\n');
+    await git(mainSub, 'add', 'later.txt');
+    await git(mainSub, 'commit', '--quiet', '-m', 'later local tip');
+    const targetSub = path.join(managedPath('feature-x'), 'lib/sub');
+    await gitShim(`if [ "$2" = '${targetSub}' ] && [ "$5" = fetch ]; then echo 'local SHA fetch failed' >&2; exit 1; fi`);
+    await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab'])).resolves.toMatchObject({
+      warnings: ['local submodule reuse failed for lib/sub: local SHA fetch failed'],
+    });
+    await expect(Promise.all([git(targetSub, 'show', 'HEAD:README.md'), git(targetSub, 'remote', 'get-url', 'origin')])).resolves.toStrictEqual([
+      'test\n',
+      `file://${sub.origin}\n`,
+    ]);
   });
 
   it('reuses a recorded commit even when it is no longer referenced in the main submodule', async () => {

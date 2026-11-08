@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { constants, cpSync, lstatSync, realpathSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { CliError, must, run } from './proc.ts';
 import type { RunResult } from './proc.ts';
 
@@ -296,25 +297,35 @@ const reuseLocalSubmodules = async (root: string, dir: string): Promise<string[]
       if (url.status !== 0) {
         return [];
       }
-      const initialized = await gitRun(
+      const shallow = await gitRun(source, 'rev-parse', '--is-shallow-repository');
+      const isShallow = shallow.stdout.trim() === 'true';
+      let initialized = await gitRun(
         dir,
         '-c',
         'protocol.file.allow=always',
         '-c',
-        `${urlKey}=${source}`,
+        `${urlKey}=${isShallow ? pathToFileURL(source).href : source}`,
         'submodule',
         'update',
         '--init',
-        '--reference',
-        source,
+        ...(isShallow ? ['--depth', '1'] : ['--reference', source]),
         '--no-fetch',
         '--',
         sub,
       );
+      if (isShallow && initialized.status !== 0 && lstatSync(path.join(target, '.git'), { throwIfNoEntry: false })) {
+        initialized = await gitRun(target, '-c', 'protocol.file.allow=always', 'fetch', '--depth', '1', pathToFileURL(source).href, recorded.stdout.trim());
+        if (initialized.status === 0) {
+          initialized = await gitRun(target, 'checkout', '--detach', recorded.stdout.trim());
+        }
+      }
       if (lstatSync(path.join(target, '.git'), { throwIfNoEntry: false })) {
         await gitRun(target, 'remote', 'set-url', 'origin', url.stdout.trim());
       }
-      return initialized.status === 0 ? await dissociateSubmodule(target) : [];
+      if (initialized.status !== 0) {
+        return [`local submodule reuse failed for ${sub}: ${initialized.stderr.trim()}`];
+      }
+      return isShallow ? [] : await dissociateSubmodule(target);
     }),
   );
   return warnings.flat();

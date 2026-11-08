@@ -375,7 +375,7 @@ describe('git helpers', () => {
       const failure = path.join(tempDir('reference-update'), 'failed');
       await gitShim(`if [ "$2" = '${worktree}' ]; then case " $* " in *" --reference "*" --no-fetch "*) touch '${failure}'; echo 'local update failed' >&2; exit 1;; esac; fi`);
 
-      await expect(updateSubmodules(root.dir, worktree)).resolves.toStrictEqual([]);
+      await expect(updateSubmodules(root.dir, worktree)).resolves.toStrictEqual(['local submodule reuse failed for lib: local update failed']);
       expect(existsSync(failure)).toBeTruthy();
       await expect(git(path.join(worktree, 'lib'), 'rev-parse', 'HEAD')).resolves.toBe(head);
       expect(readFileSync(path.join(worktree, 'lib', 'README.md'), 'utf-8')).toBe('test\n');
