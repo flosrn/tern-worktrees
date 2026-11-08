@@ -520,7 +520,7 @@ export const run = async (args: string[]): Promise<CreateResult | SuggestedIssue
   const ctx: Context = { clone, fetchWarning, origin, repoName: path.basename(root), root, warnings, wtRoot };
   const target = await sourceTarget(ctx, source);
   const placed = await placeWorktree(ctx, target, options.relocate);
-  const port = await assignWorktreePort(root, placed.owner === 'main' ? null : placed.branch);
+  const port = await assignWorktreePort(root, placed.owner === 'main' ? null : placed.branch, placed.status === 'created');
   if (issue !== null) {
     await recordIssue(root, placed.branch, issue.data.issue, issue.input.repo);
   }

@@ -392,7 +392,9 @@ describe('git helpers', () => {
       await gitShim(
         `if [ "$2" = '${path.join(worktree, 'lib')}' ] && [ "$3" = repack ]; then echo 'object copy failed' >&2; exit 1; fi\nif [ "$2" = '${worktree}' ] && [ "$3 $4 $5 $6" = 'submodule update --init --recursive' ]; then touch '${updated}'; fi`,
       );
-      await expect(updateSubmodules(root.dir, worktree)).resolves.toStrictEqual(['submodule update failed: object copy failed']);
+      await expect(updateSubmodules(root.dir, worktree)).resolves.toStrictEqual([
+        'local submodule reuse failed for lib: object copy failed; reference to main checkout objects remains',
+      ]);
       expect(existsSync(updated)).toBeTruthy();
       await expect(git(path.join(worktree, 'lib'), 'show', 'HEAD:README.md')).resolves.toBe('test\n');
       await expect(git(path.join(worktree, 'lib'), 'remote', 'get-url', 'origin')).resolves.toBe(`${sub.origin}\n`);

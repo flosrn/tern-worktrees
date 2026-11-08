@@ -82,6 +82,51 @@ describe('worktree ports', () => {
     await expect(git(repo.dir, 'config', '--get', 'branch.feature/50.ternWtPort')).resolves.toBe('5648\n');
   });
 
+  it('reallocates a stale saved port when another live worktree has claimed it', async () => {
+    const repo = await tmpRepo('aoyama');
+    const original = await run(['--repo', repo.dir, '--branch', 'feature/10', '--new', '--no-tab']);
+    await git(repo.dir, 'worktree', 'remove', managedPath('feature-10'));
+    const stalePort = await git(repo.dir, 'config', '--get', 'branch.feature/10.ternWtPort');
+    const replacement = await run(['--repo', repo.dir, '--branch', 'feature/50', '--new', '--no-tab']);
+    expect([original, stalePort, replacement]).toMatchObject([{ port: 5646 }, '5646\n', { port: 5646 }]);
+
+    await expect(run(['--repo', repo.dir, '--branch', 'feature/10', '--no-tab'])).resolves.toMatchObject({ port: 5648 });
+    await expect(
+      Promise.all([git(repo.dir, 'config', '--get', 'branch.feature/10.ternWtPort'), main(['env', managedPath('feature-10')]), main(['env', managedPath('feature-50')])]),
+    ).resolves.toMatchObject(['5648\n', { stdout: '{"env":{"TERN_WT_PORT":"5648"}}\n' }, { stdout: '{"env":{"TERN_WT_PORT":"5646"}}\n' }]);
+    const listed = await main(['list', '--repo', repo.dir]);
+    // SAFETY: list returns JSON worktrees with branch and port fields.
+    const listing = JSON.parse(listed.stdout) as { worktrees: { branch: string | null; port: number | null }[] };
+    expect(
+      Object.fromEntries(listing.worktrees.filter(({ branch }) => branch === 'feature/10' || branch === 'feature/50').map(({ branch, port }) => [branch, port])),
+    ).toStrictEqual({
+      'feature/10': 5648,
+      'feature/50': 5646,
+    });
+  });
+
+  it('reserves an older unsaved worktree port before creating an alphabetically earlier branch', async () => {
+    const repo = await tmpRepo('aoyama');
+    const linked = managedPath('feature-50');
+    await git(repo.dir, 'worktree', 'add', '-b', 'feature/50', linked);
+    await expect(git(repo.dir, 'config', '--get', 'branch.feature/50.ternWtPort')).rejects.toMatchObject({ code: 'git_failed' });
+    await expect(main(['env', linked])).resolves.toMatchObject({ stdout: '{"env":{"TERN_WT_PORT":"5646"}}\n' });
+
+    await expect(run(['--repo', repo.dir, '--branch', 'feature/10', '--new', '--no-tab'])).resolves.toMatchObject({ port: 5648 });
+    await expect(
+      Promise.all([git(repo.dir, 'config', '--get', 'branch.feature/50.ternWtPort'), main(['env', linked]), main(['env', managedPath('feature-10')])]),
+    ).resolves.toMatchObject(['5646\n', { stdout: '{"env":{"TERN_WT_PORT":"5646"}}\n' }, { stdout: '{"env":{"TERN_WT_PORT":"5648"}}\n' }]);
+    const listed = await main(['list', '--repo', repo.dir]);
+    // SAFETY: list returns JSON worktrees with branch and port fields.
+    const listing = JSON.parse(listed.stdout) as { worktrees: { branch: string | null; port: number | null }[] };
+    expect(
+      Object.fromEntries(listing.worktrees.filter(({ branch }) => branch === 'feature/10' || branch === 'feature/50').map(({ branch, port }) => [branch, port])),
+    ).toStrictEqual({
+      'feature/10': 5648,
+      'feature/50': 5646,
+    });
+  });
+
   it('wraps past 5998, skips saved ports and keeps the assigned port after relocation', async () => {
     const repo = await tmpRepo('aoyama');
     await git(repo.dir, 'worktree', 'add', '-b', 'occupied', path.join(tempDir('occupied'), 'wt'));
