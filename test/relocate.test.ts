@@ -352,6 +352,7 @@ describe('create command', () => {
       });
 
       it('warns when the submodule update fails and keeps the worktree', async () => {
+        rmSync(path.join(repo.dir, 'sub'), { recursive: true });
         const result = await run(['--repo', repo.dir, '--branch', 'feature/s', '--no-tab']);
         expect(result).toMatchObject({ status: 'created' });
         expect(result.warnings).toHaveLength(1);

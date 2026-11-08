@@ -1,11 +1,10 @@
 import { directoryArgs } from '../directory-args.ts';
 import { loadConfig, setupCommands } from '../config.ts';
-import { worktreeRoot } from '../environment.ts';
+import { worktreeEnvironment, worktreeRoot } from '../environment.ts';
 import { readOrigin } from '../github.ts';
 import { CliError, run as runProcess } from '../proc.ts';
 import { repoKey } from '../repo-ref.ts';
 import { ensureServices } from '../services.ts';
-import { loadWorktreeConfig } from '../worktree-config.ts';
 
 /** Starts shared services, then runs repository and user setup in order. */
 export const run = async (args: string[]): Promise<object> => {
@@ -14,7 +13,7 @@ export const run = async (args: string[]): Promise<object> => {
     throw new CliError('bad_args', 'prepare requires one worktree path');
   }
   const root = await worktreeRoot(positionals[0]);
-  const config = loadWorktreeConfig(root);
+  const config = await worktreeEnvironment(root);
   const origin = await readOrigin(root);
   const services = await ensureServices(root, config);
   const commands = [...config.setup, ...(origin.github ? setupCommands(loadConfig(), origin.github) : [])];

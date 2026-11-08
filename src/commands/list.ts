@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { directoryArgs } from '../directory-args.ts';
-import { changedFileCount, checkoutAt, currentBranch, requireRepoRoot } from '../git.ts';
+import { changedFileCount, checkoutAt, currentBranch, requireRepoRoot, worktreePort } from '../git.ts';
 import { worktreeOwner, worktreeRoot } from '../paths.ts';
 import type { WorktreeRoot } from '../paths.ts';
 
@@ -13,6 +13,7 @@ export interface ListedWorktree {
   path: string;
   repo: string;
   branch: string | null;
+  port: number | null;
   dirty: boolean;
   changed: number;
   owner: 'tern' | 'omp';
@@ -58,7 +59,15 @@ const readWorktree = async (root: WorktreeRoot, dir: string, all: boolean): Prom
   const [branch, changed] = await Promise.all([currentBranch(dir), changedFileCount(dir)]);
   return {
     warning: changed.error === null ? null : `changed files not counted in ${dir}: ${changed.error}`,
-    worktree: { branch, changed: changed.count, dirty: changed.count > 0, owner, path: dir, repo: checkout.main },
+    worktree: {
+      branch,
+      changed: changed.count,
+      dirty: changed.count > 0,
+      owner,
+      path: dir,
+      port: branch === null ? null : await worktreePort(checkout.main, branch),
+      repo: checkout.main,
+    },
   };
 };
 

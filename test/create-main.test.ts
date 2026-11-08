@@ -40,6 +40,7 @@ describe('create command', () => {
         carried: [],
         owner: 'main',
         path: repo.dir,
+        port: null,
         repo: repo.dir,
         setup: null,
         status: 'reused',

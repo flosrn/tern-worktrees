@@ -1,8 +1,8 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vite-plus/test';
 import { run } from '../src/commands/create.ts';
-import { git, ignoreGlobally, tempDir, tmpRepo, useOmp, useSandbox } from './helpers.ts';
+import { git, ignoreGlobally, managedPath, tempDir, tmpRepo, useOmp, useSandbox } from './helpers.ts';
 import type { RepoFixture } from './helpers.ts';
 
 const WITH_FILE = ['-c', 'protocol.file.allow=always'];
@@ -40,6 +40,42 @@ describe('create command in omp clone mode with submodules', () => {
     repo = await tmpRepo('aoyama');
     mainSub = path.join(repo.dir, 'lib', 'sub');
     await ignoreGlobally('.env');
+  });
+
+  it('initializes from the main checkout without its remote and keeps independent objects', async () => {
+    const sub = await tmpRepo('sub');
+    await git(repo.dir, ...WITH_FILE, 'submodule', '--quiet', 'add', sub.dir, 'lib/sub');
+    await git(repo.dir, 'commit', '--quiet', '-m', 'add sub');
+    await git(repo.dir, 'push', '--quiet', 'origin', 'HEAD:refs/heads/feature/x');
+    const recorded = await git(mainSub, 'rev-parse', 'HEAD');
+    rmSync(sub.dir, { recursive: true });
+    const result = await run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab']);
+    expect(result).toMatchObject({ status: 'created', warnings: [] });
+    const targetSub = path.join(managedPath('feature-x'), 'lib/sub');
+    expect(readFileSync(path.join(targetSub, 'README.md'), 'utf-8')).toBe('test\n');
+    await expect(git(targetSub, 'remote', 'get-url', 'origin')).resolves.toBe(`${sub.dir}\n`);
+    const targetGit = await git(targetSub, 'rev-parse', '--absolute-git-dir');
+    expect(existsSync(path.join(targetGit.trim(), 'objects/info/alternates'))).toBeFalsy();
+    rmSync(path.join(repo.dir, '.git/modules'), { recursive: true });
+    await expect(Promise.all([git(targetSub, 'show', 'HEAD:README.md'), git(targetSub, 'rev-parse', 'HEAD')])).resolves.toStrictEqual(['test\n', recorded]);
+  });
+
+  it('reuses a recorded commit even when it is no longer referenced in the main submodule', async () => {
+    const sub = await tmpRepo('sub');
+    await git(repo.dir, ...WITH_FILE, 'submodule', '--quiet', 'add', sub.dir, 'lib/sub');
+    await git(repo.dir, 'commit', '--quiet', '-m', 'add sub');
+    writeFileSync(path.join(mainSub, 'local.txt'), 'local-only\n');
+    await git(mainSub, 'add', 'local.txt');
+    await git(mainSub, 'commit', '--quiet', '-m', 'local commit');
+    await git(repo.dir, 'commit', '--quiet', '-am', 'record local commit');
+    await git(repo.dir, 'push', '--quiet', 'origin', 'HEAD:refs/heads/feature/x');
+    await git(mainSub, 'repack', '-ad');
+    await git(mainSub, 'reset', '--quiet', '--hard', 'HEAD~1');
+    rmSync(sub.dir, { recursive: true });
+    await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab'])).resolves.toMatchObject({ warnings: [] });
+    const targetSub = path.join(managedPath('feature-x'), 'lib/sub');
+    rmSync(path.join(repo.dir, '.git/modules'), { recursive: true });
+    await expect(git(targetSub, 'show', 'HEAD:local.txt')).resolves.toBe('local-only\n');
   });
 
   it('repairs the submodules that the clone copied: git works in them, at the recorded commits, with the cloned files kept', async () => {

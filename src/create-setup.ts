@@ -1,4 +1,6 @@
 import { loadConfig, setupCommands } from './config.ts';
+import { worktreeEnvironment } from './environment.ts';
+import { ensureServices } from './services.ts';
 import type { Origin } from './github.ts';
 import type { WorktreeConfig } from './worktree-config.ts';
 
@@ -12,4 +14,16 @@ export const setupLine = (origin: Origin, config: WorktreeConfig | null): string
     commands.unshift('eval "$(tern-wt env . --shell)"');
   }
   return commands.length === 0 ? null : commands.join(' && ');
+};
+
+/** Loads a new worktree's environment and starts shared services only when it will open a tab. */
+export const prepareSetup = async (dir: string, created: boolean, noTab: boolean): Promise<WorktreeConfig | null> => {
+  if (!created) {
+    return null;
+  }
+  const config = await worktreeEnvironment(dir);
+  if (!noTab) {
+    await ensureServices(dir, config);
+  }
+  return config;
 };

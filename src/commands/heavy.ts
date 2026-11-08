@@ -1,11 +1,10 @@
 import { directoryArgs } from '../directory-args.ts';
 import { CliOutput } from '../cli-output.ts';
-import { worktreeRoot } from '../environment.ts';
+import { worktreeEnvironment, worktreeRoot } from '../environment.ts';
 import { acquireHeavySlot, heavyStatus } from '../heavy.ts';
 import type { HeavyStatus } from '../heavy.ts';
 import { CANCEL_EXIT_CODES, CANCEL_SIGNALS, CliError, runInherited } from '../proc.ts';
 import { ensureServices } from '../services.ts';
-import { loadWorktreeConfig } from '../worktree-config.ts';
 
 /** Reports host slots, or runs a command in a host-wide heavy slot with the worktree environment. */
 export const run = async (args: string[]): Promise<HeavyStatus | CliOutput> => {
@@ -22,7 +21,7 @@ export const run = async (args: string[]): Promise<HeavyStatus | CliOutput> => {
     throw new CliError('bad_args', 'heavy needs --status or [--repo <dir>] -- <command> [args...]');
   }
   const root = await worktreeRoot(values.repo ?? process.cwd());
-  const config = loadWorktreeConfig(root);
+  const config = await worktreeEnvironment(root);
   if (status) {
     return heavyStatus(config.heavy);
   }

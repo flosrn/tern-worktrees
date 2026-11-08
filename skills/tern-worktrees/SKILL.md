@@ -45,6 +45,9 @@ When the main checkout has the branch, also the head branch of `--pr`, `create` 
 
 When omp is installed and the omp setting `worktree.clone` is true in the repository, `create` makes the worktree with `omp worktree add`, also when `TERN_WT_HOME` is set. A rebuilt relocation uses plain git. The new worktree starts as a copy-on-write clone of the main checkout, so it has the ignored files of the main checkout, for example `.env` and `node_modules`. The clone also copies the `.git` file of each submodule, which then points to no git folder. `create` deletes each of these files, copies the submodule git folders of the main checkout into the git folder of the worktree, and runs `git submodule update`. Thus git works in each submodule, each submodule is at the recorded commit, and the files of the clone stay. A new branch gets the same upstream as plain `git worktree add -b` gives it, `origin/<default>` with the git defaults. Each line that omp prints to standard error, for example that the clone fell back to a checkout, becomes a warning that starts with `omp:`. When `omp config list --json` fails in the repository, `create` uses plain git and adds a warning that starts with `omp config list`. omp moves an invalid `.omp/config.yml` of the repository aside to `.omp/config.yml.broken-<id>` when it reads it.
 
+Before the last `git submodule update --init --recursive`, `create` initializes top-level submodules from the main checkout when its local objects contain the recorded commit. It uses a temporary local URL with `--reference`. After checkout, it copies the objects into each submodule and removes the reference to the main object store. Each submodule then keeps its own objects. Its `origin` is restored to the original URL. If the commit is missing or local initialization fails, the normal recursive update can fetch from the original URL. This also applies to plain git worktrees and a rebuilt relocation. A repair failure adds `submodule repair failed: <error>` before a `submodule update failed: <error>` warning. The worktree stays available.
+Local initialization applies only when the target submodule has no `.git`. A submodule with `.git` uses the normal recursive update, with no change to its custom `origin` or repack of its objects.
+
 - `--repo`: a dir in the repository. Required for `--branch`, `--pr`, and short issue references (`#n` or `n`). An issue URL uses this checkout when its `origin` matches, otherwise the checkout at `<cloneRoot>/<owner>/<repo>`.
 - `--branch`: a local branch or a branch on `origin`. With `--issue`, overrides the derived name and needs no `--new`. A name that git rejects gives `bad_args`.
 - `--new`: make `--branch` a new branch from `origin/<default>`. When the branch is local or on `origin`, `--new` gives `bad_args`, also when the branch has a worktree.
@@ -60,14 +63,15 @@ A local or `origin` branch that matches `^(fix|feat)/<n>(?:-|$)` is reused with 
 
 For these related branch names only, the CLI first selects a branch with a `ternIssue` value that matches the issue URL exactly, then a branch with no issue association.
 
-For a new worktree, `create` loads `.tern/worktree.json` and starts or reuses its services before opening the tab. It waits a maximum of 30 s for the shell prompt, then types the setup line: environment activation first when set, repository setup commands second, and user setup commands last, with `&&` between them. These commands run in the tab. `create` does not wait for them to complete. See [Repository environment](#repository-environment). Reused and relocated worktrees get no preparation.
+For a new worktree, `create` loads `.tern/worktree.json` and starts or reuses its services before opening the tab. It waits a maximum of 30 s for the shell prompt, then types the setup line: environment activation first, repository setup commands second, and user setup commands last, with `&&` between them. These commands run in the tab. `create` does not wait for them to complete. See [Repository environment](#repository-environment). Reused and relocated worktrees get no preparation.
 
-Output: `{"path", "branch", "repo", "owner", "status", "carried", "setup", "tab", "warnings"}`, plus `issue` for an issue.
+Output: `{"path", "branch", "repo", "owner", "port", "status", "carried", "setup", "tab", "warnings"}`, plus `issue` for an issue.
 
 - `owner`: `tern` for a tern-managed worktree, `omp` for an omp-owned worktree, as in `list`, and `main` for the main checkout. A reused omp-owned worktree and the omp checkout of a pull request give `omp`.
+- `port`: the numeric worktree base port, or null for the main checkout. It is an even number from 4000 through 5998, saved in `branch.<branch>.ternWtPort`. Reuse and relocation keep a saved value. Without one, start at `4000 + 2 * (SHA256(<main checkout folder name>/<branch>).readUInt32BE(0) % 1000)`. Collisions with other live branch worktrees of the same repository increase the port by 2, wrapping from 5998 to 4000. Use the base port and base + 1 for two development servers. Shared Docker service ports stay as declared.
 - `status`: `created`, `reused` or `relocated`. For an omp-owned worktree and for the main checkout, `reused` with its `path`.
 - `carried`: the ignored files, as paths in the worktree, that a rebuilt relocation copied into the new worktree. Empty otherwise. When the new worktree has a file at that path, the copy stays in the temporary folder, with a `not carried:` warning.
-- `setup`: `{"line", "typed"}`, or null. For a new worktree, `line` joins repository setup and user setup commands with `&&`. When repository environment variables are set, it starts with `eval "$(tern-wt env . --shell)"`. Repository setup and environment variables need no GitHub origin. User setup commands use its name with owner. `setup` is null for reused or relocated worktrees, or when there are no environment variables and no setup commands. `typed` is true when `create` typed the line into the tab it opened. When the tab was open before, no prompt shows in 30 s, or Tern fails, `typed` is false with a `setup not run:` warning, and the worktree stays. With `--no-tab`, `typed` is false without running the line.
+- `setup`: `{"line", "typed"}`, or null. For a new worktree, `line` starts with `eval "$(tern-wt env . --shell)"` to activate `TERN_WT_PORT` and the declared environment variables, then joins repository setup and user setup commands with `&&`. It still returns the activation line without a repository file or setup commands. Repository setup and environment variables need no GitHub origin. User setup commands use its name with owner. `setup` is null for reused or relocated worktrees. `typed` is true when `create` typed the line into the tab it opened. When the tab was open before, no prompt shows in 30 s, or Tern fails, `typed` is false with a `setup not run:` warning, and the worktree stays. With `--no-tab`, `typed` is false without running the line.
 - `tab`: `{"session", "block", "opened"}`, or null with a `tab not opened:` warning. `opened` is false when `create` focused a tab that was open before.
 - `issue`: for an issue URL or short issue reference, `{"number", "url", "title"}` identifying the issue recorded in `ternIssue`. No `issue` field for `/pull/<n>` URLs, which use the PR flow.
 
@@ -77,7 +81,7 @@ The Carly `create` export has the signature `(repo: string, branch: string?, new
 
 `tern-wt prepare <path> [--no-setup]`
 
-Loads the [repository environment](#repository-environment), starts or reuses shared Docker services, then runs setup commands sequentially in the checkout root: repository commands first, user commands second. Applies the declared environment to each command and waits for it to complete. `--no-setup` still starts or reuses services but runs no setup commands. This command needs no Tern tab.
+Loads the [repository environment](#repository-environment), starts or reuses shared Docker services, then runs setup commands sequentially in the checkout root: repository commands first, user commands second. Applies the declared environment and, for a linked branch worktree, `TERN_WT_PORT` to each command and waits for it to complete. `--no-setup` still starts or reuses services but runs no setup commands. This command needs no Tern tab.
 
 Output: `{"path", "repo", "services": [{"name", "container", "status"}], "setup": [{"command", "exitCode", "ms"}], "env", "warnings"}`. `path` is the checkout root, `repo` its lowercase name with owner or null without a GitHub origin, service `status` is `started` or `running`, and `ms` is each command's time in milliseconds. `setup` is empty with `--no-setup`. The first failed command stops setup with `setup_failed`, `command`, `exitCode` and the last 40 output lines in `output`.
 
@@ -85,13 +89,13 @@ Output: `{"path", "repo", "services": [{"name", "container", "status"}], "setup"
 
 `tern-wt env <path> [--shell]`
 
-Returns `{"env": {"NAME": "value"}}` from the repository file. With `--shell`, prints POSIX-quoted `export NAME='value'` lines, not JSON. Apply them to the current shell with `eval "$(tern-wt env . --shell)"`. This command starts no services and runs no setup commands.
+Returns `{"env": {"NAME": "value"}}` with repository variables and, for a linked branch worktree, the base port as the string `TERN_WT_PORT`. Without repository variables, an example is `{"env":{"TERN_WT_PORT":"4280"}}`. The main checkout and detached worktrees get no generated `TERN_WT_PORT`. With `--shell`, prints POSIX-quoted `export NAME='value'` lines, not JSON. Apply them to the current shell with `eval "$(tern-wt env . --shell)"`. The generated port needs no repository file. Reading an older worktree without a saved port derives it without writing git settings. This command starts no services and runs no setup commands.
 
 ### `heavy`
 
 `tern-wt heavy [--repo <dir>] -- <command> [args...]`
 
-Starts or reuses repository services, applies the declared environment, gets a host-wide slot and runs the command. `--repo` selects the repository file. The command's working directory stays the current directory. It runs no setup commands. Standard output, standard error and the child exit code pass through without a JSON result.
+Starts or reuses repository services, applies the declared environment and, for a linked branch worktree, `TERN_WT_PORT`, gets a host-wide slot and runs the command. `--repo` selects the checkout for its repository file and base port. The command's working directory stays the current directory. It runs no setup commands. Standard output, standard error and the child exit code pass through without a JSON result.
 
 The number of slots is `max(1, floor(total host RAM in GiB / heavy.slotMemoryGb))`, with 7 GiB for each slot by default. Locks are `<plugin-data>/heavy/slot-<n>.lock`. Acquisition removes locks with dead process IDs. When all slots are busy, it prints one waiting message to standard error and retries at 5 s intervals. The lock is released when the command ends or receives SIGHUP, SIGINT or SIGTERM. The child runs in its own session, so cancellation goes to its process group. It has no controlling terminal. A command that opens `/dev/tty`, for example an interactive privilege prompt or a credential prompt, fails.
 
@@ -151,10 +155,11 @@ Process removal works on Linux and macOS and needs repository attribution. A pro
 
 - `--all`: also list the omp-owned worktrees, at all depths in the worktree root. `list` does not look in a worktree or a main checkout.
 
-Output: `{"root", "warnings", "worktrees": [{"path", "repo", "branch", "dirty", "changed", "owner"}]}`. Without `--all`, `list` shows the tern-managed worktrees only. With `--repo`, `list` shows only the worktrees of the repository that contains `<dir>`.
+Output: `{"root", "warnings", "worktrees": [{"path", "repo", "branch", "port", "dirty", "changed", "owner"}]}`. Without `--all`, `list` shows the tern-managed worktrees only. With `--repo`, `list` shows only the worktrees of the repository that contains `<dir>`.
 
 - `repo`: the main checkout.
 - `branch`: null for a detached `HEAD`.
+- `port`: the numeric worktree base port, or null for a detached `HEAD`. Uses the saved value from `create`, or derives it for an older worktree without writing git settings.
 - `changed`: the number of files with changes. Each changed or new file counts one time, and submodule changes also count.
 - `dirty`: true when `changed` is more than 0.
 - `owner`: `tern` for a tern-managed worktree and `omp` for an omp-owned worktree.
@@ -242,7 +247,7 @@ Read `.tern/worktree.json` at the checkout root. Each key is optional. A missing
 
 - `setup`: an ordered array of non-empty shell commands without line breaks, default `[]`. Runs before user setup commands.
 - `services`: a map from service names to Docker declarations, default `{}`. Each declaration must have `image` (string), `port` (host port) and `containerPort` (container port). Optional fields are `env` (string map), `args` (argument array after the image), `tmpfs` and `memory` (strings passed to Docker), and `ready` (non-empty command array for `docker exec`). Ports are integers from 1 to 65535. Names use letters, digits, `.`, `_` and `-`, start with a letter or digit, and are unique ignoring case.
-- `env`: a string map, default `{}`. Names must be valid environment variable identifiers. Values are literal. Only a leading `~/` expands to the home directory. `$VAR` and shell substitutions are not expanded. Applies to setup, heavy commands and the setup line of new worktree tabs. Service `env` values stay literal, also with `~/`.
+- `env`: a string map, default `{}`. Names must be valid environment variable identifiers. `TERN_WT_PORT` is reserved. Declaring it here gives `worktree_config_invalid`. Values are literal. Only a leading `~/` expands to the home directory. `$VAR` and shell substitutions are not expanded. Applies to setup, heavy commands and the setup line of new worktree tabs. A linked branch worktree also receives its generated `TERN_WT_PORT`, even without this file. Service `env` values stay literal, also with `~/`.
 - `heavy.slotMemoryGb`: a positive finite number, default `7`, for sizing host-wide heavy slots.
 
 Services need a GitHub origin. All worktrees of the repository share the lowercase container name `tern-wt-<owner>-<repo>-<name>` and label `tern-wt.service=<owner>/<repo>/<name>`. Running containers are reused without changing their declaration. Stopped containers are removed with `docker rm -fv` and started again from the declared specification. `ready` runs in the container until it succeeds, with a 60 s deadline, also for reused running containers. Service failures stop preparation before setup or a new tab opens. See the [README example](../../README.md#prepare-a-repository-environment) for a complete declaration.

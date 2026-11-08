@@ -42,9 +42,9 @@ describe('list command', () => {
       root: worktreeRootDir(),
       warnings: [],
       worktrees: [
-        { branch: 'feature/x', changed: 0, dirty: false, owner: 'tern', path: clean, repo: repo.dir },
-        { branch: null, changed: 0, dirty: false, owner: 'tern', path: detached, repo: repo.dir },
-        { branch: 'feature/y', changed: 1, dirty: true, owner: 'tern', path: dirty, repo: other.dir },
+        { branch: 'feature/x', changed: 0, dirty: false, owner: 'tern', path: clean, port: 5610, repo: repo.dir },
+        { branch: null, changed: 0, dirty: false, owner: 'tern', path: detached, port: null, repo: repo.dir },
+        { branch: 'feature/y', changed: 1, dirty: true, owner: 'tern', path: dirty, port: 4744, repo: other.dir },
       ],
     });
   });
@@ -75,7 +75,7 @@ describe('list command', () => {
     await expect(run([])).resolves.toStrictEqual({
       root: worktreeRootDir(),
       warnings: [],
-      worktrees: [{ branch: 'feature/x', changed: 2, dirty: true, owner: 'tern', path: dir, repo: repo.dir }],
+      worktrees: [{ branch: 'feature/x', changed: 2, dirty: true, owner: 'tern', path: dir, port: 5610, repo: repo.dir }],
     });
   });
 
@@ -86,7 +86,7 @@ describe('list command', () => {
     await expect(run(['--all'])).resolves.toStrictEqual({
       root: worktreeRootDir(),
       warnings: [],
-      worktrees: [{ branch: 'feature/x', changed: 0, dirty: false, owner: 'tern', path: mine, repo: repo.dir }],
+      worktrees: [{ branch: 'feature/x', changed: 0, dirty: false, owner: 'tern', path: mine, port: 5610, repo: repo.dir }],
     });
   });
 
@@ -97,7 +97,7 @@ describe('list command', () => {
     await expect(run(['--repo', mine])).resolves.toStrictEqual({
       root: worktreeRootDir(),
       warnings: [],
-      worktrees: [{ branch: 'feature/x', changed: 0, dirty: false, owner: 'tern', path: mine, repo: repo.dir }],
+      worktrees: [{ branch: 'feature/x', changed: 0, dirty: false, owner: 'tern', path: mine, port: 5610, repo: repo.dir }],
     });
   });
 
@@ -108,7 +108,7 @@ describe('list command', () => {
     await expect(run(['--repo', repo.dir])).resolves.toStrictEqual({
       root: worktreeRootDir(),
       warnings: [],
-      worktrees: [{ branch: 'feature/x', changed: 0, dirty: false, owner: 'tern', path: mine, repo: repo.dir }],
+      worktrees: [{ branch: 'feature/x', changed: 0, dirty: false, owner: 'tern', path: mine, port: 5610, repo: repo.dir }],
     });
   });
 
@@ -122,7 +122,7 @@ describe('list command', () => {
     await expect(run([])).resolves.toStrictEqual({
       root: base,
       warnings: [],
-      worktrees: [{ branch: 'feature/x', changed: 0, dirty: false, owner: 'tern', path: mine, repo: repo.dir }],
+      worktrees: [{ branch: 'feature/x', changed: 0, dirty: false, owner: 'tern', path: mine, port: 5610, repo: repo.dir }],
     });
   });
 
@@ -150,11 +150,11 @@ describe('list command', () => {
         root: base,
         warnings: [],
         worktrees: [
-          { branch: 'pr-7', changed: 0, dirty: false, owner: 'omp', path: shallow, repo: repo.dir },
-          { branch: null, changed: 0, dirty: false, owner: 'omp', path: detached, repo: repo.dir },
-          { branch: 'feature/x', changed: 0, dirty: false, owner: 'tern', path: mine, repo: repo.dir },
-          { branch: 'wt/2', changed: 0, dirty: false, owner: 'omp', path: deeper, repo: repo.dir },
-          { branch: 'wt/1', changed: 1, dirty: true, owner: 'omp', path: deep, repo: repo.dir },
+          { branch: 'pr-7', changed: 0, dirty: false, owner: 'omp', path: shallow, port: 5880, repo: repo.dir },
+          { branch: null, changed: 0, dirty: false, owner: 'omp', path: detached, port: null, repo: repo.dir },
+          { branch: 'feature/x', changed: 0, dirty: false, owner: 'tern', path: mine, port: 5610, repo: repo.dir },
+          { branch: 'wt/2', changed: 0, dirty: false, owner: 'omp', path: deeper, port: 5424, repo: repo.dir },
+          { branch: 'wt/1', changed: 1, dirty: true, owner: 'omp', path: deep, port: 4614, repo: repo.dir },
         ],
       });
     });
@@ -169,7 +169,7 @@ describe('list command', () => {
       await expect(run(['--all'])).resolves.toStrictEqual({
         root: base,
         warnings: [],
-        worktrees: [{ branch: 'pr-7', changed: 1, dirty: true, owner: 'omp', path: outer, repo: repo.dir }],
+        worktrees: [{ branch: 'pr-7', changed: 1, dirty: true, owner: 'omp', path: outer, port: 5880, repo: repo.dir }],
       });
     });
 
@@ -181,7 +181,7 @@ describe('list command', () => {
       await expect(run(['--all', '--repo', repo.dir])).resolves.toStrictEqual({
         root: base,
         warnings: [],
-        worktrees: [{ branch: 'pr-7', changed: 0, dirty: false, owner: 'omp', path: mine, repo: repo.dir }],
+        worktrees: [{ branch: 'pr-7', changed: 0, dirty: false, owner: 'omp', path: mine, port: 5880, repo: repo.dir }],
       });
     });
 
@@ -228,11 +228,11 @@ describe('list command with a worktree that git cannot read', () => {
     const index = await git(broken, 'rev-parse', '--path-format=absolute', '--git-path', 'index');
     writeFileSync(index.trim(), 'not an index');
     writeFileSync(path.join(broken, 'junk.txt'), 'x\n');
-    const listed = { branch: 'feature/x', changed: 0, dirty: false, owner: 'tern', path: mine, repo: repo.dir };
+    const listed = { branch: 'feature/x', changed: 0, dirty: false, owner: 'tern', path: mine, port: 5610, repo: repo.dir };
     await expect(run([])).resolves.toStrictEqual({
       root: worktreeRootDir(),
       warnings: [`changed files not counted in ${broken}: fatal: ${index.trim()}: index file smaller than expected`],
-      worktrees: [listed, { branch: 'feature/y', changed: 0, dirty: false, owner: 'tern', path: broken, repo: other.dir }],
+      worktrees: [listed, { branch: 'feature/y', changed: 0, dirty: false, owner: 'tern', path: broken, port: 4744, repo: other.dir }],
     });
     const log = await logGitCalls();
     await expect(run(['--repo', repo.dir])).resolves.toStrictEqual({ root: worktreeRootDir(), warnings: [], worktrees: [listed] });
@@ -253,8 +253,8 @@ describe('list command with a worktree that git cannot read', () => {
       // Git versions word this error differently. The warning gives the git message after the path.
       warnings: [expect.stringContaining(`changed files not counted in ${broken}: fatal: `)],
       worktrees: [
-        { branch: 'feature/x', changed: 0, dirty: false, owner: 'tern', path: clean, repo: repo.dir },
-        { branch: 'feature/y', changed: 1, dirty: true, owner: 'tern', path: broken, repo: repo.dir },
+        { branch: 'feature/x', changed: 0, dirty: false, owner: 'tern', path: clean, port: 5610, repo: repo.dir },
+        { branch: 'feature/y', changed: 1, dirty: true, owner: 'tern', path: broken, port: 5780, repo: repo.dir },
       ],
     };
     await expect(run([])).resolves.toStrictEqual(expected);
