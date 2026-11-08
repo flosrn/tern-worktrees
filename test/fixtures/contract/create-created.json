@@ -3,8 +3,12 @@
   "carried": [],
   "owner": "tern",
   "path": "{{worktree}}",
+  "port": 5610,
   "repo": "{{repo}}",
-  "setup": null,
+  "setup": {
+    "line": "eval \"$(tern-wt env . --shell)\"",
+    "typed": false
+  },
   "status": "created",
   "tab": null,
   "warnings": []

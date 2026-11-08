@@ -6,7 +6,8 @@ import type { WorktreeConfig } from '../src/worktree-config.ts';
 import { cliJson, contract, FIXTURE_BIN, git, logGitCalls, managedPath, readLog, tempDir, ternLog, tmpRepo, useGithubOrigin, useOmp, useSandbox, writeTernLs } from './helpers.ts';
 import type { RepoFixture, Sandbox } from './helpers.ts';
 
-const LINE = 'npm ci && npm test';
+const ACTIVATE = 'eval "$(tern-wt env . --shell)"';
+const LINE = `${ACTIVATE} && npm ci && npm test`;
 
 const WAIT = 'wait 42 --until prompt --timeout 30';
 
@@ -41,8 +42,8 @@ describe('create command', () => {
   describe('setup commands', () => {
     it('types the setup commands into the new worktree tab at the prompt', async () => {
       const result = await run(['--repo', repo.dir, '--branch', 'feature/x']);
-      expect(result).toMatchObject({ setup: { line: LINE, typed: true }, status: 'created', tab: { block: 42, opened: true, session: 'work' }, warnings: [] });
-      expect(Object.keys(result)).toStrictEqual(['branch', 'carried', 'owner', 'path', 'repo', 'setup', 'status', 'tab', 'warnings']);
+      expect(result).toMatchObject({ port: 5610, setup: { line: LINE, typed: true }, status: 'created', tab: { block: 42, opened: true, session: 'work' }, warnings: [] });
+      expect(Object.keys(result)).toStrictEqual(['branch', 'carried', 'owner', 'path', 'port', 'repo', 'setup', 'status', 'tab', 'warnings']);
       expect(ternLog()).toStrictEqual(['ls --json', `new tab work --cwd ${managedPath('feature-x')} --json`, 'rename 42 feature/x --json', WAIT, `run 42 ${LINE}`]);
     });
   });
@@ -56,7 +57,7 @@ describe('create command', () => {
       expect(setupCalls()).toStrictEqual([WAIT, `run 42 ${line}`]);
     });
 
-    it('returns repository setup without requiring a GitHub origin or environment variables', async () => {
+    it('returns activation and repository setup without a GitHub origin or configured environment variables', async () => {
       await writeRepositoryConfig({ setup: ['npm run prepare'] });
       vi.stubEnv(
         'PATH',
@@ -65,7 +66,8 @@ describe('create command', () => {
           .join(':'),
       );
       await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab'])).resolves.toMatchObject({
-        setup: { line: 'npm run prepare', typed: false },
+        port: 5610,
+        setup: { line: `${ACTIVATE} && npm run prepare`, typed: false },
         tab: null,
         warnings: [],
       });
@@ -82,7 +84,8 @@ describe('create command', () => {
         writeFileSync(path.join(shimDir, 'docker'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexit 1\n`, { mode: 0o755 });
         vi.stubEnv('PATH', `${shimDir}:${process.env.PATH ?? ''}`);
         await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab'])).resolves.toMatchObject({
-          setup: { line: 'eval "$(tern-wt env . --shell)"', typed: false },
+          port: 5610,
+          setup: { line: ACTIVATE, typed: false },
           tab: null,
           warnings: [],
         });
@@ -133,13 +136,18 @@ describe('create command', () => {
 
     it('gives no setup commands to a reused worktree', async () => {
       await run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab']);
-      await expect(run(['--repo', repo.dir, '--branch', 'feature/x'])).resolves.toMatchObject({ setup: null, status: 'reused', tab: { opened: true } });
+      await expect(run(['--repo', repo.dir, '--branch', 'feature/x'])).resolves.toMatchObject({ port: 5610, setup: null, status: 'reused', tab: { opened: true } });
       expect(setupCalls()).toStrictEqual([]);
     });
 
     it('gives no setup commands to a relocated worktree', async () => {
       await git(repo.dir, 'worktree', 'add', '--quiet', '--track', '-b', 'feature/x', path.join(tempDir('elsewhere'), 'wt'), 'origin/feature/x');
-      await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--relocate'])).resolves.toMatchObject({ setup: null, status: 'relocated', tab: { opened: true } });
+      await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--relocate'])).resolves.toMatchObject({
+        port: 5610,
+        setup: null,
+        status: 'relocated',
+        tab: { opened: true },
+      });
       expect(setupCalls()).toStrictEqual([]);
     });
 
@@ -148,25 +156,35 @@ describe('create command', () => {
       useOmp({ base, clone: false });
       const ompOwned = path.join(base, 'feature-x-abc1234');
       await git(repo.dir, 'worktree', 'add', '--quiet', '--track', '-b', 'feature/x', ompOwned, 'origin/feature/x');
-      await expect(run(['--repo', repo.dir, '--branch', 'feature/x'])).resolves.toMatchObject({ path: ompOwned, setup: null, status: 'reused', tab: { opened: true } });
+      await expect(run(['--repo', repo.dir, '--branch', 'feature/x'])).resolves.toMatchObject({ path: ompOwned, port: 5610, setup: null, status: 'reused', tab: { opened: true } });
       expect(setupCalls()).toStrictEqual([]);
     });
 
-    it.each([[{ 'other/repo': ['npm ci'] }], [{ 'virtusize/aoyama': [] }]])('gives no setup commands to a repository without commands in %j', async setup => {
+    it.each([[{ 'other/repo': ['npm ci'] }], [{ 'virtusize/aoyama': [] }]])('activates the environment for a repository without setup commands in %j', async setup => {
       writeSetup(setup);
-      await expect(run(['--repo', repo.dir, '--branch', 'feature/x'])).resolves.toMatchObject({ setup: null, status: 'created', tab: { opened: true } });
-      expect(setupCalls()).toStrictEqual([]);
+      await expect(run(['--repo', repo.dir, '--branch', 'feature/x'])).resolves.toMatchObject({
+        port: 5610,
+        setup: { line: ACTIVATE, typed: true },
+        status: 'created',
+        tab: { opened: true },
+      });
+      expect(setupCalls()).toStrictEqual([WAIT, `run 42 ${ACTIVATE}`]);
     });
 
-    it('gives no setup commands to a repository without a GitHub origin', async () => {
+    it('activates the environment for a repository without a GitHub origin', async () => {
       vi.stubEnv(
         'PATH',
         process.env.PATH?.split(':')
           .filter(dir => dir !== originShimDir)
           .join(':'),
       );
-      await expect(run(['--repo', repo.dir, '--branch', 'feature/x'])).resolves.toMatchObject({ setup: null, status: 'created', tab: { opened: true } });
-      expect(setupCalls()).toStrictEqual([]);
+      await expect(run(['--repo', repo.dir, '--branch', 'feature/x'])).resolves.toMatchObject({
+        port: 5610,
+        setup: { line: ACTIVATE, typed: true },
+        status: 'created',
+        tab: { opened: true },
+      });
+      expect(setupCalls()).toStrictEqual([WAIT, `run 42 ${ACTIVATE}`]);
     });
 
     it('keeps the worktree and warns when the shell shows no prompt', async () => {

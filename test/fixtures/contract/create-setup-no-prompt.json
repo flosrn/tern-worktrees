@@ -3,9 +3,10 @@
   "carried": [],
   "owner": "tern",
   "path": "{{worktree}}",
+  "port": 5610,
   "repo": "{{repo}}",
   "setup": {
-    "line": "npm ci && npm test",
+    "line": "eval \"$(tern-wt env . --shell)\" && npm ci && npm test",
     "typed": false
   },
   "status": "created",

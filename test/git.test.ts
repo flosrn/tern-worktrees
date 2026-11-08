@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vite-plus/test';
 import {
@@ -278,6 +278,186 @@ describe('git helpers', () => {
         `submodule repair failed: ENOENT: no such file or directory, lstat '${path.join(root.dir, '.git', 'modules')}'`,
       ]);
       expect(broken.map(file => existsSync(file))).toStrictEqual([true, true]);
+    });
+
+    it('initializes submodules recursively when the main checkout has no initialized submodule', async () => {
+      const [root, sub, nested] = await Promise.all([tmpRepo('root'), tmpRepo('sub'), tmpRepo('nested')]);
+      await git(root.dir, 'config', '--global', 'protocol.file.allow', 'always');
+      await git(sub.dir, 'submodule', 'add', '--quiet', nested.origin, 'nested');
+      await git(sub.dir, 'commit', '--quiet', '-am', 'add nested submodule');
+      await git(sub.dir, 'push', '--quiet');
+      await git(root.dir, 'submodule', 'add', '--quiet', sub.origin, 'lib');
+      await git(root.dir, 'commit', '--quiet', '-am', 'add submodule');
+      const head = await git(sub.dir, 'rev-parse', 'HEAD');
+      const nestedHead = await git(nested.dir, 'rev-parse', 'HEAD');
+      await git(root.dir, 'submodule', 'deinit', '--force', '--all');
+      const worktree = path.join(tempDir('worktree'), 'checkout');
+      await git(root.dir, 'clone', '--quiet', '--no-local', root.dir, worktree);
+
+      expect(existsSync(path.join(root.dir, 'lib', '.git'))).toBeFalsy();
+      await expect(updateSubmodules(root.dir, worktree)).resolves.toStrictEqual([]);
+      await expect(Promise.all([git(path.join(worktree, 'lib'), 'rev-parse', 'HEAD'), git(path.join(worktree, 'lib', 'nested'), 'rev-parse', 'HEAD')])).resolves.toStrictEqual([
+        head,
+        nestedHead,
+      ]);
+      expect(readFileSync(path.join(worktree, 'lib', 'nested', 'README.md'), 'utf-8')).toBe('test\n');
+      await expect(
+        Promise.all([git(path.join(worktree, 'lib'), 'remote', 'get-url', 'origin'), git(path.join(worktree, 'lib', 'nested'), 'remote', 'get-url', 'origin')]),
+      ).resolves.toStrictEqual([`${sub.origin}\n`, `${nested.origin}\n`]);
+    });
+
+    it('fetches the recorded commit when it is absent from the main checkout submodule', async () => {
+      const [root, sub] = await Promise.all([tmpRepo('root'), tmpRepo('sub')]);
+      await git(root.dir, 'config', '--global', 'protocol.file.allow', 'always');
+      await git(root.dir, 'submodule', 'add', '--quiet', sub.origin, 'lib');
+      await git(root.dir, 'commit', '--quiet', '-am', 'add submodule');
+      const worktree = path.join(tempDir('worktree'), 'checkout');
+      await git(root.dir, 'clone', '--quiet', '--no-local', root.dir, worktree);
+      await git(worktree, 'submodule', 'update', '--init');
+      const previous = await git(sub.dir, 'rev-parse', 'HEAD');
+      writeFileSync(path.join(sub.dir, 'target.txt'), 'recorded target\n');
+      await git(sub.dir, 'add', 'target.txt');
+      await git(sub.dir, 'commit', '--quiet', '-m', 'add recorded target');
+      await git(sub.dir, 'push', '--quiet');
+      const targetOutput = await git(sub.dir, 'rev-parse', 'HEAD');
+      const target = targetOutput.trim();
+      await git(root.dir, 'update-index', '--cacheinfo', `160000,${target},lib`);
+      await git(root.dir, 'commit', '--quiet', '-m', 'record new submodule commit');
+      await git(worktree, 'fetch', '--quiet', '--recurse-submodules=no', 'origin');
+      await git(worktree, 'checkout', '--quiet', '--detach', 'origin/main');
+
+      expect(targetOutput).not.toBe(previous);
+      await expect(
+        Promise.all([
+          Promise.resolve(existsSync(path.join(root.dir, 'lib', '.git'))),
+          gitSucceeds(path.join(root.dir, 'lib'), 'cat-file', '-e', `${target}^{commit}`),
+          gitSucceeds(path.join(worktree, 'lib'), 'cat-file', '-e', `${target}^{commit}`),
+        ]),
+      ).resolves.toStrictEqual([true, false, false]);
+      await git(worktree, 'submodule', 'deinit', '--force', '--all');
+      await expect(updateSubmodules(root.dir, worktree)).resolves.toStrictEqual([]);
+      await expect(
+        Promise.all([
+          git(path.join(worktree, 'lib'), 'rev-parse', 'HEAD'),
+          git(path.join(worktree, 'lib'), 'remote', 'get-url', 'origin'),
+          git(path.join(root.dir, 'lib'), 'rev-parse', 'HEAD'),
+        ]),
+      ).resolves.toStrictEqual([targetOutput, `${sub.origin}\n`, previous]);
+      expect(readFileSync(path.join(worktree, 'lib', 'target.txt'), 'utf-8')).toBe('recorded target\n');
+    });
+
+    it('initializes submodules normally when reading the configured URL fails', async () => {
+      const [root, sub] = await Promise.all([tmpRepo('root'), tmpRepo('sub')]);
+      await git(root.dir, 'config', '--global', 'protocol.file.allow', 'always');
+      await git(root.dir, 'submodule', 'add', '--quiet', sub.origin, 'lib');
+      await git(root.dir, 'commit', '--quiet', '-am', 'add submodule');
+      const head = await git(sub.dir, 'rev-parse', 'HEAD');
+      const worktree = path.join(tempDir('worktree'), 'checkout');
+      await git(root.dir, 'clone', '--quiet', '--no-local', root.dir, worktree);
+      const failure = path.join(tempDir('url-read'), 'failed');
+      await gitShim(`if [ "$2" = '${worktree}' ] && [ "$3 $4 $5" = 'config --get submodule.lib.url' ]; then touch '${failure}'; echo 'URL read failed' >&2; exit 1; fi`);
+
+      await expect(updateSubmodules(root.dir, worktree)).resolves.toStrictEqual([]);
+      expect(existsSync(failure)).toBeTruthy();
+      await expect(git(path.join(worktree, 'lib'), 'rev-parse', 'HEAD')).resolves.toBe(head);
+      expect(readFileSync(path.join(worktree, 'lib', 'README.md'), 'utf-8')).toBe('test\n');
+      await expect(git(path.join(worktree, 'lib'), 'remote', 'get-url', 'origin')).resolves.toBe(`${sub.origin}\n`);
+    });
+
+    it('initializes submodules normally when the local reference update fails', async () => {
+      const [root, sub] = await Promise.all([tmpRepo('root'), tmpRepo('sub')]);
+      await git(root.dir, 'config', '--global', 'protocol.file.allow', 'always');
+      await git(root.dir, 'submodule', 'add', '--quiet', sub.origin, 'lib');
+      await git(root.dir, 'commit', '--quiet', '-am', 'add submodule');
+      const head = await git(sub.dir, 'rev-parse', 'HEAD');
+      const worktree = path.join(tempDir('worktree'), 'checkout');
+      await git(root.dir, 'clone', '--quiet', '--no-local', root.dir, worktree);
+      const failure = path.join(tempDir('reference-update'), 'failed');
+      await gitShim(`if [ "$2" = '${worktree}' ]; then case " $* " in *" --reference "*" --no-fetch "*) touch '${failure}'; echo 'local update failed' >&2; exit 1;; esac; fi`);
+
+      await expect(updateSubmodules(root.dir, worktree)).resolves.toStrictEqual(['local submodule reuse failed for lib: local update failed']);
+      expect(existsSync(failure)).toBeTruthy();
+      await expect(git(path.join(worktree, 'lib'), 'rev-parse', 'HEAD')).resolves.toBe(head);
+      expect(readFileSync(path.join(worktree, 'lib', 'README.md'), 'utf-8')).toBe('test\n');
+      await expect(git(path.join(worktree, 'lib'), 'remote', 'get-url', 'origin')).resolves.toBe(`${sub.origin}\n`);
+    });
+
+    it('warns when copying borrowed objects fails and still runs the recursive update', async () => {
+      const [root, sub] = await Promise.all([tmpRepo('root'), tmpRepo('sub')]);
+      await git(root.dir, '-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet', sub.origin, 'lib');
+      await git(root.dir, 'commit', '--quiet', '-am', 'add submodule');
+      const worktree = path.join(tempDir('worktree'), 'checkout');
+      await git(root.dir, 'worktree', 'add', '--quiet', '--detach', worktree);
+      const updated = path.join(tempDir('recursive'), 'updated');
+      await gitShim(
+        `if [ "$2" = '${path.join(worktree, 'lib')}' ] && [ "$3" = repack ]; then echo 'object copy failed' >&2; exit 1; fi\nif [ "$2" = '${worktree}' ] && [ "$3 $4 $5 $6" = 'submodule update --init --recursive' ]; then touch '${updated}'; fi`,
+      );
+      await expect(updateSubmodules(root.dir, worktree)).resolves.toStrictEqual([
+        'local submodule reuse failed for lib: object copy failed; reference to main checkout objects remains',
+      ]);
+      expect(existsSync(updated)).toBeTruthy();
+      await expect(git(path.join(worktree, 'lib'), 'show', 'HEAD:README.md')).resolves.toBe('test\n');
+      await expect(git(path.join(worktree, 'lib'), 'remote', 'get-url', 'origin')).resolves.toBe(`${sub.origin}\n`);
+    });
+
+    it('preserves a populated submodule origin and does not repack its objects', async () => {
+      const [root, sub] = await Promise.all([tmpRepo('root'), tmpRepo('sub')]);
+      await git(root.dir, '-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet', sub.origin, 'lib');
+      await git(root.dir, 'commit', '--quiet', '-am', 'add submodule');
+      const worktree = path.join(tempDir('worktree'), 'checkout');
+      await git(root.dir, 'worktree', 'add', '--quiet', '--detach', worktree);
+      await git(worktree, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init');
+      await git(path.join(worktree, 'lib'), 'remote', 'set-url', 'origin', 'https://example.com/custom.git');
+      const repacked = path.join(tempDir('repack'), 'called');
+      await gitShim(`if [ "$2" = '${path.join(worktree, 'lib')}' ] && [ "$3" = repack ]; then touch '${repacked}'; fi`);
+      await expect(updateSubmodules(root.dir, worktree)).resolves.toStrictEqual([]);
+      await expect(git(path.join(worktree, 'lib'), 'remote', 'get-url', 'origin')).resolves.toBe('https://example.com/custom.git\n');
+      expect(existsSync(repacked)).toBeFalsy();
+    });
+
+    it('reuses multiple top-level submodules without changing their shared configured URLs', async () => {
+      const [root, first, second] = await Promise.all([tmpRepo('root'), tmpRepo('first'), tmpRepo('second')]);
+      await git(root.dir, 'config', '--global', 'protocol.file.allow', 'always');
+      writeFileSync(path.join(second.dir, 'second.txt'), 'second submodule\n');
+      await git(second.dir, 'add', 'second.txt');
+      await git(second.dir, 'commit', '--quiet', '-m', 'identify second submodule');
+      await git(second.dir, 'push', '--quiet');
+      await git(root.dir, 'submodule', 'add', '--quiet', '--name', 'first', first.origin, 'lib/first');
+      await git(root.dir, 'submodule', 'add', '--quiet', '--name', 'second', second.origin, 'lib/second');
+      await git(root.dir, 'commit', '--quiet', '-am', 'add two submodules');
+      const firstHead = await git(first.dir, 'rev-parse', 'HEAD');
+      const secondHead = await git(second.dir, 'rev-parse', 'HEAD');
+      const worktree = path.join(tempDir('worktree'), 'checkout');
+      await git(root.dir, 'worktree', 'add', '--quiet', '--detach', worktree);
+      rmSync(first.origin, { force: true, recursive: true });
+      rmSync(second.origin, { force: true, recursive: true });
+
+      await expect(updateSubmodules(root.dir, worktree)).resolves.toStrictEqual([]);
+      await expect(Promise.all([git(path.join(worktree, 'lib/first'), 'rev-parse', 'HEAD'), git(path.join(worktree, 'lib/second'), 'rev-parse', 'HEAD')])).resolves.toStrictEqual([
+        firstHead,
+        secondHead,
+      ]);
+      expect([readFileSync(path.join(worktree, 'lib/first', 'README.md'), 'utf-8'), readFileSync(path.join(worktree, 'lib/second', 'second.txt'), 'utf-8')]).toStrictEqual([
+        'test\n',
+        'second submodule\n',
+      ]);
+      const urls = await Promise.all(
+        [
+          ['first', first.origin],
+          ['second', second.origin],
+        ].map(async ([name, origin]) => {
+          const [mainUrl, worktreeUrl, remoteUrl, gitdir] = await Promise.all([
+            git(root.dir, 'config', '--get', `submodule.${name}.url`),
+            git(worktree, 'config', '--get', `submodule.${name}.url`),
+            git(path.join(worktree, 'lib', name), 'remote', 'get-url', 'origin'),
+            git(path.join(worktree, 'lib', name), 'rev-parse', '--absolute-git-dir'),
+          ]);
+          return { alternates: existsSync(path.join(gitdir.trim(), 'objects/info/alternates')), mainUrl, origin, remoteUrl, worktreeUrl };
+        }),
+      );
+      expect(urls).toStrictEqual(
+        [first.origin, second.origin].map(origin => ({ alternates: false, mainUrl: `${origin}\n`, origin, remoteUrl: `${origin}\n`, worktreeUrl: `${origin}\n` })),
+      );
     });
 
     it('warns with the trimmed git error when submodule update fails', async () => {

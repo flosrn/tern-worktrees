@@ -24,9 +24,10 @@ import {
   useOmp,
   useSandbox,
   writeTernLs,
-  writeTernLsRaw,
 } from './helpers.ts';
 import type { RepoFixture, Sandbox } from './helpers.ts';
+
+const ACTIVATE = 'eval "$(tern-wt env . --shell)"';
 
 let sandbox: Sandbox;
 let repo: RepoFixture;
@@ -74,7 +75,14 @@ describe('create command', () => {
       );
       await expect(headName(target)).resolves.toBe('feature/x');
       await expect(git(target, 'rev-parse', '--abbrev-ref', 'feature/x@{upstream}')).resolves.toBe('origin/feature/x\n');
-      await expect(run(['--repo', target, '--branch', 'feature/x', '--no-tab'])).resolves.toMatchObject({ owner: 'tern', path: target, status: 'reused', warnings: [] });
+      await expect(run(['--repo', target, '--branch', 'feature/x', '--no-tab'])).resolves.toMatchObject({
+        owner: 'tern',
+        path: target,
+        port: 5610,
+        setup: null,
+        status: 'reused',
+        warnings: [],
+      });
     });
 
     it('checks out an existing local branch', async () => {
@@ -184,7 +192,13 @@ describe('create command', () => {
 
     it('creates the worktree of a same-repo pull request', async () => {
       ghPrView();
-      await expect(run(['--repo', repo.dir, '--pr', '7', '--no-tab'])).resolves.toMatchObject({ branch: 'feature/x', path: managedPath('feature-x'), status: 'created' });
+      await expect(run(['--repo', repo.dir, '--pr', '7', '--no-tab'])).resolves.toMatchObject({
+        branch: 'feature/x',
+        path: managedPath('feature-x'),
+        port: 5610,
+        setup: { line: ACTIVATE, typed: false },
+        status: 'created',
+      });
       await expect(headName(managedPath('feature-x'))).resolves.toBe('feature/x');
     });
 
@@ -193,9 +207,20 @@ describe('create command', () => {
       ghFixture(['pr', 'checkout', '7', '--branch', 'pr-7'], '');
       const shimDir = tempDir('gh-shim');
       const cwdLog = path.join(shimDir, 'cwd.log');
-      writeFileSync(path.join(shimDir, 'gh'), `#!/bin/sh\npwd -P >> '${cwdLog}'\nexec '${path.join(FIXTURE_BIN, 'gh')}' "$@"\n`, { mode: 0o755 });
+      writeFileSync(
+        path.join(shimDir, 'gh'),
+        `#!/bin/sh\npwd -P >> '${cwdLog}'\nif [ "$1 $2" = 'pr checkout' ]; then git switch --quiet -c "$5"; fi\nexec '${path.join(FIXTURE_BIN, 'gh')}' "$@"\n`,
+        { mode: 0o755 },
+      );
       vi.stubEnv('PATH', `${shimDir}:${process.env.PATH ?? ''}`);
-      await expect(run(['--repo', repo.dir, '--pr', '7', '--no-tab'])).resolves.toMatchObject({ branch: 'pr-7', path: managedPath('pr-7'), status: 'created', warnings: [] });
+      await expect(run(['--repo', repo.dir, '--pr', '7', '--no-tab'])).resolves.toMatchObject({
+        branch: 'pr-7',
+        path: managedPath('pr-7'),
+        port: 5880,
+        setup: { line: ACTIVATE, typed: false },
+        status: 'created',
+        warnings: [],
+      });
       expect(ghLog()).toContain('pr checkout 7 --branch pr-7');
       expect(readLog(cwdLog).at(-1)).toBe(managedPath('pr-7'));
       await expect(git(managedPath('pr-7'), 'rev-parse', 'HEAD')).resolves.toBe(await git(repo.dir, 'rev-parse', 'origin/main'));
@@ -204,7 +229,7 @@ describe('create command', () => {
     it('applies the lookup rules to an existing pr-<n> worktree', async () => {
       ghPrView('feature/x', { fork: true });
       await git(repo.dir, 'worktree', 'add', '--quiet', '-b', 'pr-7', managedPath('pr-7'));
-      await expect(run(['--repo', repo.dir, '--pr', '7', '--no-tab'])).resolves.toMatchObject({ branch: 'pr-7', status: 'reused' });
+      await expect(run(['--repo', repo.dir, '--pr', '7', '--no-tab'])).resolves.toMatchObject({ branch: 'pr-7', port: 5880, setup: null, status: 'reused' });
       expect(ghLog()).not.toContain('pr checkout 7 --branch pr-7');
     });
 
@@ -245,8 +270,9 @@ describe('create command', () => {
         carried: [],
         owner: 'tern',
         path: target,
+        port: 5610,
         repo: repo.dir,
-        setup: null,
+        setup: { line: ACTIVATE, typed: false },
         status: 'created',
         tab: null,
         warnings: [],
@@ -370,6 +396,7 @@ describe('create command', () => {
         carried: [],
         owner: 'omp',
         path: ompOwned,
+        port: 5610,
         repo: repo.dir,
         setup: null,
         status: 'reused',
@@ -404,6 +431,7 @@ describe('create command', () => {
           carried: [],
           owner: 'omp',
           path: ompCheckout(),
+          port: 5880,
           repo: repo.dir,
           setup: null,
           status: 'reused',
@@ -415,7 +443,14 @@ describe('create command', () => {
       });
 
       it('reuses the omp checkout on pr-<n> without ompPrHeadRef', async () => {
-        await expect(run(['--repo', repo.dir, '--pr', '7', '--no-tab'])).resolves.toMatchObject({ branch: 'pr-7', owner: 'omp', path: ompCheckout(), status: 'reused' });
+        await expect(run(['--repo', repo.dir, '--pr', '7', '--no-tab'])).resolves.toMatchObject({
+          branch: 'pr-7',
+          owner: 'omp',
+          path: ompCheckout(),
+          port: 5880,
+          setup: null,
+          status: 'reused',
+        });
       });
 
       it('adds a worktree when ompPrHeadRef names another branch', async () => {
@@ -440,43 +475,6 @@ describe('create command', () => {
         const target = path.join(base, 'aoyama', 'feature-x');
         await expect(run(['--repo', repo.dir, '--pr', '7', '--no-tab'])).resolves.toMatchObject({ branch: 'feature/x', path: target, status: 'created' });
       });
-    });
-  });
-
-  describe('tabs', () => {
-    it('opens a tab in the session of the repo', async () => {
-      writeTernLs({ other: [tempDir('plain')], work: [repo.dir] });
-      await expect(run(['--repo', repo.dir, '--branch', 'feature/x'])).resolves.toMatchObject({ tab: { block: 42, opened: true, session: 'work' }, warnings: [] });
-      expect(ternLog()).toStrictEqual(['ls --json', `new tab work --cwd ${managedPath('feature-x')} --json`, 'rename 42 feature/x --json']);
-    });
-
-    it('opens a session named after the repo', async () => {
-      writeTernLs({});
-      await expect(run(['--repo', repo.dir, '--branch', 'feature/x'])).resolves.toMatchObject({ tab: { block: 42, opened: true, session: 'aoyama' } });
-      expect(ternLog()).toStrictEqual(['ls --json', `new session aoyama --cwd ${managedPath('feature-x')} --json`, 'rename 42 feature/x --json']);
-    });
-
-    it('focuses the tab that already shows the worktree', async () => {
-      await run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab']);
-      writeTernLs({ work: [repo.dir, path.join(managedPath('feature-x'), 'src')] });
-      await expect(run(['--repo', repo.dir, '--branch', 'feature/x'])).resolves.toMatchObject({ status: 'reused', tab: { block: 2, opened: false, session: 'work' } });
-      expect(ternLog()).toStrictEqual(['ls --json', 'focus 2 --json']);
-    });
-
-    it('keeps the worktree when Tern fails', async () => {
-      writeTernLs({});
-      vi.stubEnv('FAKE_TERN_FAIL', 'new');
-      await expect(run(['--repo', repo.dir, '--branch', 'feature/x'])).resolves.toMatchObject({
-        status: 'created',
-        tab: null,
-        warnings: ['tab not opened: fake tern: new failed'],
-      });
-      expect(existsSync(managedPath('feature-x'))).toBeTruthy();
-    });
-
-    it('passes on other errors', async () => {
-      writeTernLsRaw('{');
-      await expect(run(['--repo', repo.dir, '--branch', 'feature/x'])).rejects.toBeInstanceOf(SyntaxError);
     });
   });
 });

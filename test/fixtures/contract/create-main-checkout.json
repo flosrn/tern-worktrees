@@ -3,6 +3,7 @@
   "carried": [],
   "owner": "main",
   "path": "{{repo}}",
+  "port": null,
   "repo": "{{repo}}",
   "setup": null,
   "status": "reused",

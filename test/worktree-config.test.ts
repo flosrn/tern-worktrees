@@ -43,7 +43,7 @@ describe('repository configuration', () => {
       const service = {
         args: ['postgres', '-c', 'fsync=off'],
         containerPort: 5432,
-        env: { HOME_PATH: '~/inside-container', POSTGRES_PASSWORD: '$literal' },
+        env: { HOME_PATH: '~/inside-container', POSTGRES_PASSWORD: '$literal', TERN_WT_PORT: 'container-only' },
         image: 'postgres:17',
         memory: '2g',
         port: 55_432,

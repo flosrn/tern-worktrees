@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto';
 import { constants, cpSync, lstatSync, realpathSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { CliError, must, run } from './proc.ts';
 import type { RunResult } from './proc.ts';
 
@@ -30,7 +32,10 @@ export const isAncestor = async (dir: string, commit: string, of: string): Promi
 
 const mainCheckoutOf = (commonDir: string): string | null => (commonDir.endsWith('/.git') ? path.dirname(commonDir) : null);
 
-const commonDirArgs = ['rev-parse', '--path-format=absolute', '--git-common-dir'];
+const ABSOLUTE_PATH = '--path-format=absolute';
+const MODULES = 'modules';
+const GIT_PATH = '--git-path';
+const commonDirArgs = ['rev-parse', ABSOLUTE_PATH, '--git-common-dir'];
 
 /** The main checkout of the repository that holds `dir`, or null when `dir` is not in a repository with a checkout. */
 export const repoRoot = async (dir: string): Promise<string | null> => {
@@ -124,6 +129,84 @@ export const worktrees = async (root: string): Promise<Worktree[]> => {
     .map(parseWorktree);
 };
 
+/** The deterministic even base port of a repository branch, in the range 4000 through 5998. */
+const branchPort = (root: string, branch: string): number =>
+  4000 +
+  2 *
+    (createHash('sha256')
+      .update(`${path.basename(root)}/${branch}`)
+      .digest()
+      .readUInt32BE(0) %
+      1000);
+
+/** Finds the first free even base port, with wraparound. */
+const freePort = (start: number, used: Set<number>): number => {
+  let port = start;
+  while (used.has(port)) {
+    port = port === 5998 ? 4000 : port + 2;
+  }
+  return port;
+};
+
+/** Resolves saved ports before deriving the ports of older branch worktrees. */
+const portsForBranches = async (root: string, branches: string[]): Promise<Map<string, number>> => {
+  const configured = await Promise.all(
+    branches.toSorted().map(async name => {
+      const result = await gitRun(root, 'config', '--get', `branch.${name}.ternWtPort`);
+      return { name, port: result.status === 0 ? Number(result.stdout.trim()) : null };
+    }),
+  );
+  const used = new Set<number>();
+  const ports = new Map<string, number>();
+  for (const entry of configured) {
+    if (entry.port !== null && !used.has(entry.port)) {
+      ports.set(entry.name, entry.port);
+      used.add(entry.port);
+    }
+  }
+  for (const entry of configured) {
+    if (!ports.has(entry.name)) {
+      const port = freePort(branchPort(root, entry.name), used);
+      ports.set(entry.name, port);
+      used.add(port);
+    }
+  }
+  return ports;
+};
+
+/** Reads a branch's saved base port, or derives a free port without writing config. */
+export const worktreePort = async (root: string, branch: string): Promise<number> => {
+  const listed = await worktrees(root);
+  const branches = new Set(listed.filter(worktree => !worktree.main && !worktree.prunable).flatMap(worktree => (worktree.branch === null ? [] : [worktree.branch])));
+  branches.add(branch);
+  const ports = await portsForBranches(root, [...branches]);
+  return Number(ports.get(branch));
+};
+
+/** Saves live worktree ports before a new branch gets its port. Concurrent creates must run sequentially. */
+export const assignWorktreePort = async (root: string, branch: string | null, created: boolean): Promise<number | null> => {
+  if (branch === null) {
+    return null;
+  }
+  const listed = await worktrees(root);
+  const branches = listed
+    .filter(worktree => !worktree.main && !worktree.prunable && (!created || worktree.branch !== branch))
+    .flatMap(worktree => (worktree.branch === null ? [] : [worktree.branch]));
+  const ports = await portsForBranches(root, branches);
+  if (created) {
+    const saved = await gitRun(root, 'config', '--get', `branch.${branch}.ternWtPort`);
+    const used = new Set(ports.values());
+    const previous = Number(saved.stdout.trim());
+    ports.set(branch, saved.status === 0 && !used.has(previous) ? previous : freePort(branchPort(root, branch), used));
+  }
+  for (const [name, port] of ports) {
+    // Git config writes share one lock file.
+    // eslint-disable-next-line no-await-in-loop
+    await gitMust(root, 'config', `branch.${name}.ternWtPort`, String(port));
+  }
+  return Number(ports.get(branch));
+};
+
 const lines = (output: string): string[] => output.split('\n').filter(line => line !== '');
 
 const statusArgs = (ignoreSubmodules: 'all' | 'none'): string[] => ['status', '--porcelain', '--untracked-files=all', `--ignore-submodules=${ignoreSubmodules}`];
@@ -153,19 +236,19 @@ export const changedFileCount = async (dir: string): Promise<ChangedCount> => {
   return { count: outer.status === 0 ? lines(outer.stdout).length : 0, error: full.stderr.trim() };
 };
 
-/** The submodule paths in the `.gitmodules` file of the folder `base`, relative to `base`. Git runs in `top`. */
-const gitmodulesPaths = async (top: string, base: string): Promise<string[]> => {
+/** The path config entries in `.gitmodules` at `base`. Git runs in `top`. */
+const gitmodulesEntries = async (top: string, base: string): Promise<{ key: string; sub: string }[]> => {
   const result = await gitRun(top, 'config', '-z', '-f', path.join(base, '.gitmodules'), '--get-regexp', String.raw`^submodule\..*\.path$`);
   return result.stdout
     .split('\0')
     .filter(entry => entry !== '')
-    .map(entry => entry.slice(entry.indexOf('\n') + 1));
+    .map(entry => ({ key: entry.slice(0, entry.indexOf('\n')), sub: entry.slice(entry.indexOf('\n') + 1) }));
 };
 
 const brokenGitfilesUnder = async (top: string, base: string): Promise<string[]> => {
-  const subs = await gitmodulesPaths(top, base);
+  const subs = await gitmodulesEntries(top, base);
   const found = await Promise.all(
-    subs.map(async sub => {
+    subs.map(async ({ sub }) => {
       const subDir = path.join(base, sub);
       const gitfile = path.join(subDir, '.git');
       const broken = lstatSync(gitfile, { throwIfNoEntry: false })?.isFile() === true && !(await gitSucceeds(subDir, 'rev-parse', '--git-dir'));
@@ -192,7 +275,7 @@ const repairClonedSubmodules = async (root: string, dir: string): Promise<string
     return [];
   }
   try {
-    const [from, to] = await Promise.all([root, dir].map(async checkout => await gitMust(checkout, 'rev-parse', '--path-format=absolute', '--git-path', 'modules')));
+    const [from, to] = await Promise.all([root, dir].map(async checkout => await gitMust(checkout, 'rev-parse', ABSOLUTE_PATH, GIT_PATH, MODULES)));
     cpSync(from.trim(), to.trim(), { mode: constants.COPYFILE_FICLONE, recursive: true });
   } catch (error) {
     // SAFETY: the git step throws a CliError, and the copy throws an Error from node:fs.
@@ -204,22 +287,101 @@ const repairClonedSubmodules = async (root: string, dir: string): Promise<string
   return [];
 };
 
+/** Tells if the object store at `dir` holds `commit`. */
+const hasCommit = async (dir: string, commit: string): Promise<boolean> => await gitSucceeds(dir, 'cat-file', '-e', `${commit}^{commit}`);
+
+/** Copies borrowed objects after checkout, then removes their reference. A failure keeps the reference and becomes an update warning. */
+const dissociateSubmodule = async (target: string, sub: string): Promise<string[]> => {
+  try {
+    const alternates = await gitMust(target, 'rev-parse', ABSOLUTE_PATH, GIT_PATH, 'objects/info/alternates');
+    if (!lstatSync(alternates.trim(), { throwIfNoEntry: false })) {
+      return [];
+    }
+    await gitMust(target, 'repack', '-a', '-d');
+    rmSync(alternates.trim(), { force: true });
+    return [];
+  } catch (error) {
+    // SAFETY: git commands throw a CliError, and file removal throws an Error from node:fs.
+    return [`local submodule reuse failed for ${sub}: ${(error as Error).message}; reference to main checkout objects remains`];
+  }
+};
+
+/** Fetches the recorded commit from a shallow local source before checking it out. */
+const fetchLocalCommit = async (target: string, source: string, commit: string): Promise<RunResult> => {
+  const fetched = await gitRun(target, '-c', 'protocol.file.allow=always', 'fetch', '--depth', '1', pathToFileURL(source).href, commit);
+  return fetched.status === 0 ? await gitRun(target, 'checkout', '--detach', commit) : fetched;
+};
+/** Initializes top-level submodules from independent copies of the main checkout's objects when it holds the recorded commit. */
+const reuseLocalSubmodules = async (root: string, dir: string): Promise<string[]> => {
+  const entries = await gitmodulesEntries(dir, dir);
+  await gitRun(dir, 'submodule', 'init');
+  const warnings = await Promise.all(
+    entries.map(async ({ key, sub }) => {
+      const source = path.join(root, sub);
+      const target = path.join(dir, sub);
+      if (!lstatSync(path.join(source, '.git'), { throwIfNoEntry: false }) || lstatSync(path.join(target, '.git'), { throwIfNoEntry: false })) {
+        return [];
+      }
+      const recorded = await gitRun(dir, 'ls-tree', '--format=%(objectname)', 'HEAD', '--', sub);
+      if (!(await hasCommit(source, recorded.stdout.trim()))) {
+        return [];
+      }
+      const urlKey = `${key.slice(0, -'path'.length)}url`;
+      const url = await gitRun(dir, 'config', '--get', urlKey);
+      if (url.status !== 0) {
+        return [];
+      }
+      const moduleName = key.slice('submodule.'.length, -'.path'.length);
+      const moduleDir = await gitMust(dir, 'rev-parse', ABSOLUTE_PATH, GIT_PATH, `${MODULES}/${moduleName}`);
+      const cloned = !lstatSync(moduleDir.trim(), { throwIfNoEntry: false });
+      const shallow = await gitRun(source, 'rev-parse', '--is-shallow-repository');
+      const isShallow = shallow.stdout.trim() === 'true';
+      let initialized = await gitRun(
+        dir,
+        '-c',
+        'protocol.file.allow=always',
+        '-c',
+        `${urlKey}=${isShallow ? pathToFileURL(source).href : source}`,
+        'submodule',
+        'update',
+        '--init',
+        ...(isShallow ? ['--depth', '1'] : ['--reference', source]),
+        '--no-fetch',
+        '--',
+        sub,
+      );
+      if (isShallow && initialized.status !== 0 && lstatSync(path.join(target, '.git'), { throwIfNoEntry: false })) {
+        initialized = await fetchLocalCommit(target, source, recorded.stdout.trim());
+      }
+      if (cloned && lstatSync(path.join(target, '.git'), { throwIfNoEntry: false })) {
+        await gitRun(target, 'remote', 'set-url', 'origin', url.stdout.trim());
+      }
+      if (initialized.status !== 0) {
+        return [`local submodule reuse failed for ${sub}: ${initialized.stderr.trim()}`];
+      }
+      if (!lstatSync(path.join(target, '.git'), { throwIfNoEntry: false })) {
+        return [];
+      }
+      return isShallow ? [] : await dissociateSubmodule(target, sub);
+    }),
+  );
+  return warnings.flat();
+};
+
 /**
- * Updates the submodules of the worktree at `dir`. `root` is the main checkout of the worktree. It repairs the `.git` files that omp clone
- * mode copied, then runs `git submodule update --init --recursive`. It gives the warnings in the sequence of the steps: the repair warning
- * first, then the update warning.
+ * Updates the submodules of the worktree at `dir`. `root` is its main checkout. It repairs the `.git` files that omp clone mode copied,
+ * initializes top-level submodules from local objects where possible, then runs `git submodule update --init --recursive`.
+ * Warnings keep the repair warning first, then the update warning.
  */
 export const updateSubmodules = async (root: string, dir: string): Promise<string[]> => {
   const warnings = await repairClonedSubmodules(root, dir);
+  warnings.push(...(await reuseLocalSubmodules(root, dir)));
   const result = await gitRun(dir, 'submodule', 'update', '--init', '--recursive');
   return result.status === 0 ? warnings : [...warnings, `submodule update failed: ${result.stderr.trim()}`];
 };
 
 /** The paths of the initialized submodules of the worktree at `dir`, at each depth, relative to `dir`. A submodule comes before the submodules in it. */
 export const submodules = async (dir: string): Promise<string[]> => lines(await gitMust(dir, 'submodule', 'foreach', '--quiet', '--recursive', 'printf "%s\\n" "$displaypath"'));
-
-/** Tells if the object store at `dir` holds `commit`. */
-const hasCommit = async (dir: string, commit: string): Promise<boolean> => await gitSucceeds(dir, 'cat-file', '-e', `${commit}^{commit}`);
 
 /** The commit recorded for `sub` at `revision` that is also in the object store of the submodule, or null. */
 export const recordedSubmoduleCommit = async (dir: string, revision: string, sub: string): Promise<string | null> => {

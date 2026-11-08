@@ -6,9 +6,10 @@ local runner = require("./runner")
 local test, eq = runner.test, runner.eq
 
 local PATH = "/wt/worktrees/app/x"
-local LINE = "npm ci && npm test"
 local BRANCHES = Stub.fixture("branches-offline", { repo = "/r/app" })
 local CREATE_VARS = Stub.worktree_vars("x")
+-- The setup line of the `create-setup-no-tab` fixture: the environment line that exports TERN_WT_PORT, then the setup commands.
+local LINE = serde.decode("json", Stub.fixture("create-setup-no-tab", CREATE_VARS)).setup.line
 
 -- The first warning of the `create` contract fixture `name`: the CLI words for a setup that did not run.
 local function setup_warning(name: string): string
@@ -90,7 +91,13 @@ end)
 
 test("a create whose setup is null types nothing and shows no setup toast", function()
 	local plugin, cx, panes = Stub.window()
-	create_x(plugin, cx, Stub.fixture("create-created", CREATE_VARS))
+	create_x(
+		plugin,
+		cx,
+		Stub.answer("create-created", CREATE_VARS, function(answer: any)
+			answer.setup = nil
+		end)
+	)
 	find_pane(panes, SHELL).at_prompt = true
 	plugin:tick(31000)
 	eq(#cx.typed, 0, "typed")

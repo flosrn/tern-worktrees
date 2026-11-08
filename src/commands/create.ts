@@ -4,8 +4,8 @@ import path from 'node:path';
 import { directoryArgs } from '../directory-args.ts';
 import { chooseIssueBranch, readIssue, recordIssue, resolveIssue } from '../create-issue.ts';
 import type { CreatedIssue, IssueData, IssueInput, SuggestedIssue } from '../create-issue.ts';
-import { setupLine } from '../create-setup.ts';
-import { fetchOrigin, gitMust, gitRun, gitSucceeds, requireRepoRoot, updateSubmodules, worktrees } from '../git.ts';
+import { prepareSetup, setupLine } from '../create-setup.ts';
+import { assignWorktreePort, fetchOrigin, gitMust, gitRun, gitSucceeds, requireRepoRoot, updateSubmodules, worktrees } from '../git.ts';
 import type { Worktree } from '../git.ts';
 import { defaultBranch, ghMust, ghMustWith, readOrigin } from '../github.ts';
 import type { GhPullRequest, Origin } from '../github.ts';
@@ -14,10 +14,8 @@ import { isUnder, worktreeOwner, worktreePath, worktreeRoot } from '../paths.ts'
 import type { WorktreeOwner, WorktreeRoot } from '../paths.ts';
 import { CliError } from '../proc.ts';
 import { nameWithOwner } from '../repo-ref.ts';
-import { ensureServices } from '../services.ts';
 import { blocksUnder, focus, ls, newSession, newTab, rename, sessionForRepo, typeInto, waitForPrompt } from '../tern.ts';
 import { guardWorkToLose } from '../work-to-lose.ts';
-import { loadWorktreeConfig } from '../worktree-config.ts';
 
 /** How `create` got the worktree. */
 export type CreateStatus = 'created' | 'relocated' | 'reused';
@@ -42,6 +40,7 @@ export interface CreateResult {
   carried: string[];
   owner: Owner;
   path: string;
+  port: number | null;
   repo: string;
   setup: { line: string; typed: boolean } | null;
   status: CreateStatus;
@@ -521,18 +520,17 @@ export const run = async (args: string[]): Promise<CreateResult | SuggestedIssue
   const ctx: Context = { clone, fetchWarning, origin, repoName: path.basename(root), root, warnings, wtRoot };
   const target = await sourceTarget(ctx, source);
   const placed = await placeWorktree(ctx, target, options.relocate);
+  const port = await assignWorktreePort(root, placed.owner === 'main' ? null : placed.branch, placed.status === 'created');
   if (issue !== null) {
     await recordIssue(root, placed.branch, issue.data.issue, issue.input.repo);
   }
-  const config = placed.status === 'created' ? loadWorktreeConfig(placed.path) : null;
-  if (config !== null && !options['no-tab']) {
-    await ensureServices(placed.path, config);
-  }
+  const config = await prepareSetup(placed.path, placed.status === 'created', options['no-tab']);
   const tab = options['no-tab'] ? null : await tryOpenTab(ctx, placed);
   const line = setupLine(ctx.origin, config);
   const { status, ...location } = placed;
   const result: CreateResult = {
     ...location,
+    port,
     repo: root,
     setup: line === null ? null : { line, typed: await typeSetup(ctx, line, tab) },
     status,

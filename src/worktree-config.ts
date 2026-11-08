@@ -71,6 +71,9 @@ const environment = (value: unknown, key: string, expand: boolean, fail: Fail): 
   }
   return Object.fromEntries(
     Object.entries(value).map(([name, entry]) => {
+      if (expand && name === 'TERN_WT_PORT') {
+        fail(`${key}.${name}`, 'reserved for the worktree base port');
+      }
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) {
         fail(`${key}.${name}`, 'expected an environment variable name');
       }

@@ -39,8 +39,12 @@ A branch made or reused by `create --issue`, named `<prefix>/<number>-<slug>` un
 _Avoid_: Issue worktree, ticket branch
 
 **Worktree variables**:
-The environment variables `TERN_WT_PATH`, `TERN_WT_MAIN` and `TERN_WT_BRANCH` of a shell that starts in a worktree in the worktree root. They name the worktree, its main checkout and its branch.
+The environment variables `TERN_WT_PATH`, `TERN_WT_MAIN` and `TERN_WT_BRANCH` of a shell that starts in a worktree in the worktree root, naming the worktree, its main checkout and its branch. `TERN_WT_PORT` is the worktree base port exported by environment activation, preparation and heavy commands for a linked branch worktree.
 _Avoid_: Worktree env, `TERN_WT_ROOT`
+
+**Worktree base port**:
+The even application port assigned to a linked branch worktree, paired with the next port for a second development server. It belongs to that branch worktree, unlike the declared Docker service ports shared by all worktrees of a repository.
+_Avoid_: Branch port
 
 **Worktree segment**:
 The part of the Tern status line that shows the branch of the worktree of the pane with the focus. When that worktree has changed files, the segment also shows the number of changed files.

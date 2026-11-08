@@ -96,7 +96,7 @@ describe('prepare and env', () => {
     configure(repo.dir, { env: { WHERE: 'main' } });
     configure(linked, { env: { WHERE: 'linked' } });
     const result = await main(['env', linked]);
-    expect(JSON.parse(result.stdout)).toStrictEqual({ env: { WHERE: 'linked' } });
+    expect(JSON.parse(result.stdout)).toStrictEqual({ env: { TERN_WT_PORT: '5452', WHERE: 'linked' } });
   });
 
   it.each(['env', 'prepare'])('rejects missing and extra paths for %s', async command => {

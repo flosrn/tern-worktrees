@@ -1,8 +1,9 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vite-plus/test';
 import { run } from '../src/commands/create.ts';
-import { git, ignoreGlobally, tempDir, tmpRepo, useOmp, useSandbox } from './helpers.ts';
+import { git, gitShim, ignoreGlobally, managedPath, tempDir, tmpRepo, useOmp, useSandbox } from './helpers.ts';
 import type { RepoFixture } from './helpers.ts';
 
 const WITH_FILE = ['-c', 'protocol.file.allow=always'];
@@ -40,6 +41,140 @@ describe('create command in omp clone mode with submodules', () => {
     repo = await tmpRepo('aoyama');
     mainSub = path.join(repo.dir, 'lib', 'sub');
     await ignoreGlobally('.env');
+  });
+
+  it('leaves update=none submodules uninitialized without changing the main object store', async () => {
+    const sub = await tmpRepo('sub');
+    const alternate = await tmpRepo('alternate');
+    await git(repo.dir, ...WITH_FILE, 'submodule', '--quiet', 'add', sub.dir, 'lib/sub');
+    await git(repo.dir, 'config', '-f', '.gitmodules', 'submodule.lib/sub.update', 'none');
+    await git(repo.dir, 'add', '.gitmodules', 'lib/sub');
+    await git(repo.dir, 'commit', '--quiet', '-m', 'add skipped submodule');
+    await git(repo.dir, 'push', '--quiet', 'origin', 'HEAD:refs/heads/feature/x');
+    expect(existsSync(path.join(mainSub, '.git'))).toBeTruthy();
+    const mainObjects = path.join(repo.dir, '.git', 'objects');
+    const alternates = path.join(mainObjects, 'info', 'alternates');
+    const alternateContent = `${path.join(alternate.origin, 'objects')}\n`;
+    writeFileSync(alternates, alternateContent);
+    const snapshotObjects = () =>
+      readdirSync(mainObjects, { recursive: true })
+        .map(String)
+        .filter(file => statSync(path.join(mainObjects, file)).isFile())
+        .toSorted()
+        .map(file => [
+          file,
+          createHash('sha256')
+            .update(readFileSync(path.join(mainObjects, file)))
+            .digest('hex'),
+        ]);
+    const mainStoreBefore = snapshotObjects();
+    const repackMarker = path.join(tempDir('repack-log'), 'repack');
+    await gitShim(`case " $* " in *" repack "*) printf '%s\\n' "$*" >>'${repackMarker}';; esac`);
+    const result = await run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab']);
+    expect({ alternates: readFileSync(alternates, 'utf-8'), objects: snapshotObjects(), repacked: existsSync(repackMarker) }).toStrictEqual({
+      alternates: alternateContent,
+      objects: mainStoreBefore,
+      repacked: false,
+    });
+    expect(result).toMatchObject({ status: 'created', warnings: [] });
+    expect(existsSync(path.join(managedPath('feature-x'), 'lib/sub', '.git'))).toBeFalsy();
+    await expect(Promise.all([git(repo.dir, 'status', '--porcelain'), git(mainSub, 'status', '--porcelain')])).resolves.toStrictEqual(['', '']);
+  });
+
+  it('initializes from the main checkout without its remote and keeps independent objects', async () => {
+    const sub = await tmpRepo('sub');
+    await git(repo.dir, ...WITH_FILE, 'submodule', '--quiet', 'add', sub.dir, 'lib/sub');
+    await git(repo.dir, 'commit', '--quiet', '-m', 'add sub');
+    await git(repo.dir, 'push', '--quiet', 'origin', 'HEAD:refs/heads/feature/x');
+    const recorded = await git(mainSub, 'rev-parse', 'HEAD');
+    rmSync(sub.dir, { recursive: true });
+    const result = await run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab']);
+    expect(result).toMatchObject({ status: 'created', warnings: [] });
+    const targetSub = path.join(managedPath('feature-x'), 'lib/sub');
+    expect(readFileSync(path.join(targetSub, 'README.md'), 'utf-8')).toBe('test\n');
+    await expect(git(targetSub, 'remote', 'get-url', 'origin')).resolves.toBe(`${sub.dir}\n`);
+    const targetGit = await git(targetSub, 'rev-parse', '--absolute-git-dir');
+    expect(existsSync(path.join(targetGit.trim(), 'objects/info/alternates'))).toBeFalsy();
+    rmSync(path.join(repo.dir, '.git/modules'), { recursive: true });
+    await expect(Promise.all([git(targetSub, 'show', 'HEAD:README.md'), git(targetSub, 'rev-parse', 'HEAD')])).resolves.toStrictEqual(['test\n', recorded]);
+  });
+
+  it.each([false, true])('initializes from a shallow main submodule after its remote disappears, with a later source tip %j', async later => {
+    const sub = await tmpRepo('sub');
+    await git(repo.dir, ...WITH_FILE, 'submodule', '--quiet', 'add', '--depth', '1', `file://${sub.origin}`, 'lib/sub');
+    await git(repo.dir, 'config', '-f', '.gitmodules', 'submodule.lib/sub.shallow', 'true');
+    await git(repo.dir, 'add', '.gitmodules', 'lib/sub');
+    await git(repo.dir, 'commit', '--quiet', '-m', 'add shallow submodule');
+    await git(repo.dir, 'push', '--quiet', 'origin', 'HEAD:refs/heads/feature/x');
+    if (later) {
+      writeFileSync(path.join(mainSub, 'later.txt'), 'later\n');
+      await git(mainSub, 'add', 'later.txt');
+      await git(mainSub, 'commit', '--quiet', '-m', 'later local tip');
+    }
+    await expect(git(mainSub, 'rev-parse', '--is-shallow-repository')).resolves.toBe('true\n');
+    rmSync(sub.origin, { recursive: true });
+    await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab'])).resolves.toMatchObject({ warnings: [] });
+    const targetSub = path.join(managedPath('feature-x'), 'lib/sub');
+    const gitdir = await git(targetSub, 'rev-parse', '--absolute-git-dir');
+    expect(existsSync(path.join(gitdir.trim(), 'objects/info/alternates'))).toBeFalsy();
+    rmSync(path.join(repo.dir, '.git/modules'), { recursive: true });
+    await expect(Promise.all([git(targetSub, 'show', 'HEAD:README.md'), git(targetSub, 'remote', 'get-url', 'origin')])).resolves.toStrictEqual([
+      'test\n',
+      `file://${sub.origin}\n`,
+    ]);
+  });
+
+  it('warns when a shallow local SHA fetch fails and uses the original remote', async () => {
+    const sub = await tmpRepo('sub');
+    await git(repo.dir, 'config', '--global', 'protocol.file.allow', 'always');
+    await git(repo.dir, 'submodule', '--quiet', 'add', '--depth', '1', `file://${sub.origin}`, 'lib/sub');
+    await git(repo.dir, 'commit', '--quiet', '-m', 'add shallow submodule');
+    await git(repo.dir, 'push', '--quiet', 'origin', 'HEAD:refs/heads/feature/x');
+    writeFileSync(path.join(mainSub, 'later.txt'), 'later\n');
+    await git(mainSub, 'add', 'later.txt');
+    await git(mainSub, 'commit', '--quiet', '-m', 'later local tip');
+    const targetSub = path.join(managedPath('feature-x'), 'lib/sub');
+    await gitShim(`if [ "$2" = '${targetSub}' ] && [ "$5" = fetch ]; then echo 'local SHA fetch failed' >&2; exit 1; fi`);
+    await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab'])).resolves.toMatchObject({
+      warnings: ['local submodule reuse failed for lib/sub: local SHA fetch failed'],
+    });
+    await expect(Promise.all([git(targetSub, 'show', 'HEAD:README.md'), git(targetSub, 'remote', 'get-url', 'origin')])).resolves.toStrictEqual([
+      'test\n',
+      `file://${sub.origin}\n`,
+    ]);
+  });
+
+  it('reuses a recorded commit even when it is no longer referenced in the main submodule', async () => {
+    const sub = await tmpRepo('sub');
+    await git(repo.dir, ...WITH_FILE, 'submodule', '--quiet', 'add', sub.dir, 'lib/sub');
+    await git(repo.dir, 'commit', '--quiet', '-m', 'add sub');
+    writeFileSync(path.join(mainSub, 'local.txt'), 'local-only\n');
+    await git(mainSub, 'add', 'local.txt');
+    await git(mainSub, 'commit', '--quiet', '-m', 'local commit');
+    await git(repo.dir, 'commit', '--quiet', '-am', 'record local commit');
+    await git(repo.dir, 'push', '--quiet', 'origin', 'HEAD:refs/heads/feature/x');
+    await git(mainSub, 'repack', '-ad');
+    await git(mainSub, 'reset', '--quiet', '--hard', 'HEAD~1');
+    rmSync(sub.dir, { recursive: true });
+    await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab'])).resolves.toMatchObject({ warnings: [] });
+    const targetSub = path.join(managedPath('feature-x'), 'lib/sub');
+    rmSync(path.join(repo.dir, '.git/modules'), { recursive: true });
+    await expect(git(targetSub, 'show', 'HEAD:local.txt')).resolves.toBe('local-only\n');
+  });
+
+  it('preserves copied submodule origins without repacking in omp clone mode', async () => {
+    const base = tempDir('omp-wt');
+    useOmp({ base, clone: true });
+    await addSubmodules();
+    const customOrigin = 'https://example.com/custom/sub.git';
+    await git(mainSub, 'remote', 'set-url', 'origin', customOrigin);
+    const repackMarker = path.join(tempDir('repack-log'), 'repack');
+    await gitShim(`case " $* " in *" repack "*) printf '%s\\n' "$*" >>'${repackMarker}';; esac`);
+    const target = path.join(base, 'aoyama', 'feature-x');
+    await expect(run(['--repo', repo.dir, '--branch', 'feature/x', '--no-tab'])).resolves.toMatchObject({ path: target, status: 'created', warnings: [] });
+    await expect(git(path.join(target, 'lib/sub'), 'remote', 'get-url', 'origin')).resolves.toBe(`${customOrigin}\n`);
+    expect(existsSync(repackMarker)).toBeFalsy();
+    await expect(git(mainSub, 'remote', 'get-url', 'origin')).resolves.toBe(`${customOrigin}\n`);
   });
 
   it('repairs the submodules that the clone copied: git works in them, at the recorded commits, with the cloned files kept', async () => {
