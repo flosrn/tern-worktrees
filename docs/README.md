@@ -10,17 +10,18 @@ A branch can still have an Orca worktree. When the user picks that branch, the p
 
 ## Architecture
 
-The design has three parts:
+The design has four parts:
 
 - `tern-wt`, a Bun and TypeScript CLI in `src/`, the single implementation. Each git and gh step runs in the CLI.
 - The window half of the plugin, `window.luau`, a thin UI over the CLI. It opens the native pickers and prompts of Tern, turns each answer into a CLI call, and keeps each worktree tab matched to its worktree. It also keeps the worktree rows of the command palette, the worktree index and the worktree segment current. It types the setup commands into a new worktree tab.
 - The host half of the plugin, `host.luau`. It holds only the spawn filter. The filter gives the worktree variables to a new shell in a worktree in the worktree root.
+- The bundled omp extension in `omp/`, loaded through omp's native extension discovery. It registers the delivery finish lifecycle, validates built-in `ask` consent and delegates teardown to the CLI.
 
 The omp skill and the Carly exports give agents the same CLI, so the user and the agents get the same behavior.
 
 ### The CLI
 
-Each command prints one JSON object, and each failure has an error code. The window half reads the code to select its next step. For example, `worktree_exists_elsewhere` opens the Relocate picker. The CLI uses only `node:` built-in modules, so Bun runs it from source and Vitest tests the same files.
+Each command prints one JSON object, and each failure has an error code. The window half reads the code to select its next step. For example, `worktree_exists_elsewhere` opens the Relocate picker. Bun runs the TypeScript source and supplies the built-in YAML parser for post-merge workflow inspection. Vitest tests the same files. The CLI uses no registry runtime dependency.
 
 `branches` lists the local branches and the branches on `origin`, each once, newest commit first. `branches --offline` reads only local refs: no fetch, no pull request list and no GitHub lookup of the default branch. The worktree rows use it, so most of their refreshes cost no network traffic.
 
@@ -28,15 +29,17 @@ To find if a folder is the top folder of a checkout, `checkoutAt` in `src/git.ts
 
 ### The links of the CLI and the skill
 
-Tern 0.8.3 has no install hook, and the manifest has no field for a CLI or a skill. `tern plugin install` only copies the package into the plugin folder of Tern. Thus, each time the window half loads, it runs `tern-wt setup` from the plugin folder. `setup` links `~/.local/bin/tern-wt` and `~/.agents/skills/tern-worktrees` to the real path of the package that it runs from. The user then installs with one command, with no checkout and no `ln -s`.
+Tern 0.8.3 has no install hook, and the manifest has no field for a CLI or a skill. `tern plugin install` only copies the package into the plugin folder of Tern. Thus, each time the window half loads, it runs `tern-wt setup` from the plugin folder. `setup` links `~/.local/bin/tern-wt` and `~/.agents/skills/tern-worktrees` to the package that it runs from. It also links the applicable omp agent directories' `extensions/tern-worktrees-omp` to that package. omp loads the bundled extension through its native package discovery on the next session start. Setup covers the default agent, active agent and real profiles on disk. It uses omp configuration paths and preserves unrelated extension links.
 
 After checking the new links, `setup` removes the previous `~/.omp/agent/skills/tern-worktrees` link only when it points to `skills/tern-worktrees` in a package with the `package.json` name `tern-worktrees`. Real folders, unrelated links and targets that cannot be identified stay unchanged. The `links` list reports a removed link with its previous target and action `removed`.
 
 The window half loads when a window starts, and also when `tern plugin install`, `tern plugin reload` or a change in a linked plugin folder loads the plugin again in an open window. In a sandbox on Tern 0.8.3, an install into an open window sent no `window_start` event, so a `window_start` handler made no links until the next window. A load has a budget of 50 ms, and Tern disables a plugin that goes over it until the next reload. Thus the load only starts a 0 ms timer, and the timer starts `setup`. The load does not start a process or wait for one.
 
-`setup` runs at each load, so a second run must change nothing. When a link points at its target, `setup` keeps it, and the window half shows no toast. When `setup` makes or replaces a link, one `Linked tern-wt and the tern-worktrees skill` toast shows. `setup` checks each link and its parent folders before it changes anything, so a `path_conflict` keeps the machine as it was, and the toast is `Setup failed: <message>`. `setup` writes only in `~/.local/bin` and `~/.omp`, not in the plugin folder, so it does not cause Tern to load a linked plugin again.
+`setup` runs at each load, so a second run must change nothing. When a link points at its target, `setup` keeps it, and the window half shows no toast. When `setup` makes or replaces a link, one `Linked tern-wt, the tern-worktrees skill and the OMP extension` toast shows. `setup` checks each link and its parent folders before it changes anything. Thus, a `path_conflict` keeps the machine as it was, and the toast is `Setup failed: <message>`. It writes the links and their parent folders, not the plugin sources. Thus, it does not cause Tern to load a linked plugin again. Restart running omp sessions to load the extension.
 
 Two windows can start at the same time, so two `setup` runs can make the same link. When `setup` cannot make a link because the link is there and points at the same target, the other run made it, and `setup` gives `kept`, not `path_conflict`.
+
+Setup covers named profiles on disk without creating new ones. Run `tern-wt setup` again after creating a profile. It does not edit omp configuration, manifests or plugin lock files.
 
 ### omp
 
@@ -147,6 +150,26 @@ After a create or a teardown, the cache of the repository of its worktree refres
 
 The cache is in the memory of the window, not in `tern.kv`. A reload of the plugin or a new window waits for `branches` one time. A cache in `tern.kv` can save that one wait, but each window writes the same key, so each read must check the shape and merge with the other windows, as the worktree index does. Also, the answer of a window that closed days before then shows at once.
 
+### Delivery finish
+
+The omp extension registers the `worktree_finish` tool and checks delivery readiness at the end of the session's work. It uses the built-in `ask` result for consent. A worker assigned by orchestration returns evidence to its coordinator. Only that coordinator offers teardown after the run completes. An explicitly scheduled continuation postpones the offer.
+
+The CLI saves each plan in `<plugin-data>/finish/<id>/state.json`, with a private directory and file. It stores canonical worktree paths, branch and commit IDs, merged PR evidence, the caller's process identity, exclusions and execution results. Saved state uses version `2`. Version `1` and other state that is not compatible are rejected without conversion or teardown. A new plan needs consent to its own preview. This local state and `worker.log` stay available for inspection after the caller's tab closes. Acknowledging the notification marks the result as shown. It does not erase the plan or omp history.
+
+Approval fixes the selected canonical paths for each offered alternative. The CLI compares the explicit approved set with the saved plan before it starts a worker. A missing, duplicate, aliased or unexpected path stops arm without teardown. The detached executor runs in a different directory and waits a maximum of 30 seconds for a selected caller to exit. It preserves the targets if it cannot prove that exit. Before each teardown, it again examines path identity, registration, branch, HEAD, merge evidence, work to lose and live activity. It calls removal without force and follows the local branch teardown policy. It does not add candidates after approval or remove remote branches.
+
+The window's finish result action reads the durable result without using the caller's pane. Its title reports the counts of removed worktrees, kept worktrees and errors. Each `keep` and `errors` entry has `path`, a stable public `code` and optional `detail`. The window maps the code to a readable English label, adds external exception detail when available, then acknowledges the result. Automation matches the code, not the label or detail. The mapping adds no Git or path policy to the window. See the [finish cause table](../skills/tern-worktrees/SKILL.md#finish-causes) for code meanings. When the display does not show the full result, it points to `tern-wt finish status <id>`. A plugin reload can still find an unacknowledged completed result. Manual tab closure keeps its interception and picker.
+
+#### Delivery finish limits
+
+In connected RPC mode, `ctx.shutdown()` does not exit omp while standard input stays open. After 30 seconds without proof of exit, the backend keeps the targets. Autonomous exit is proven for the TUI, not connected RPC mode.
+
+CI proof keeps `ready` false when workflow filters use unsupported glob syntax: `?`, `+`, `[]` or backslash escapes. Truncated API lists or diffs also prevent proof. A `workflow_run` run must match the merge commit SHA, configured event and branch. An earlier failed run at the same SHA also keeps `ready` false.
+
+An automatic check that cannot offer consent is consumed for that delivery episode, also after restart. The session can finish its report without the same continuation loop. An explicit `worktree_finish` call with `action: ready` examines readiness again. It does not grant consent.
+
+Report these limits as missing proof. Do not claim that no workflow applies. Keep the worktrees when proof is unavailable.
+
 ### Close interception
 
 Each tab with a pane in a managed worktree is a worktree tab. The window half keeps a map from each tab to its managed worktrees. It updates the map when a tab or pane opens, when a working directory changes, and after each `list --all` answer. A pane is in a managed worktree when the worktree index has an entry with the owner `tern` for its working directory: the longest path in the index that holds that directory. The owner comes from the CLI. `list --all` gives the `owner` of each worktree, and `create` gives the `owner` of the worktree that it opens. The window half reads no `.git` file and has no path test of its own. Thus a pane in an omp-owned worktree, for example `<root>/12-abc1234/src` or a task sandbox at `<root>/t<hash>/m`, is not in a managed worktree. An omp-owned worktree that `create` opens is not in the map, so closing its tab opens no picker. An entry with no owner, for example from an earlier version of the plugin, is not managed until the next `list --all` answer. The picker opens only when the folder of the worktree is on disk, so an entry of a worktree that a different tool deleted opens no picker.
@@ -229,7 +252,9 @@ The `Created worktree` or `Reused worktree` toast shows when the tab opens, befo
 
 ## Development
 
-The gates are `vp check`, `vp run check:luau`, `vp run test:luau`, `vp run lint:prose` and `vp test --coverage`, with coverage at 100%. `vp run test.mutation` runs the mutation tests. It isolates `HOME`, the Tern config folder and the Tern daemon socket, so no mutant touches the real machine. `vp run smoke` tests the CLI against a Tern session daemon of its own, with its own config folder and socket, so it does not touch the Tern that you use.
+The gates are `vp check`, `vp run check:luau`, `vp run test:luau`, `vp run lint:prose` and `vp test --coverage`, with coverage at 100%. `vp run smoke` tests the CLI against a Tern session daemon of its own, with its own config folder and socket, so it does not touch the Tern that you use.
+
+Mutation testing is optional. Hooks and CI do not run it. Use `vp run test.mutation -- --mutate <files>` for a targeted check with incremental results. The command isolates `HOME`, the Tern config folder and the Tern daemon socket. Read the score and surviving mutants in `reports/mutation/mutation.html`.
 
 The smoke test gives its clone a GitHub URL for `origin`, so the options file gives the clone setup commands. `GIT_ALLOW_PROTOCOL` makes the fetch of that URL fail at once, and `create` then uses the `origin/feature/x` of the clone. Before `remove`, the smoke test sets `origin` back to the bare repository, so `remove` runs no `gh`.
 
@@ -253,7 +278,7 @@ To run the plugin from a checkout, link it with `tern plugin link <checkout>`. T
 
 `vp run lint:prose` runs vale from `@vvago/vale`. The install script of that package downloads the vale binary from the GitHub API with no token, and shared CI runners hit the limit for calls with no token, so the install failed with HTTP 403. `patches/@vvago%2Fvale@3.24.0.patch` sends `GITHUB_TOKEN` with that download when it is set, and the setup action gives each CI job its token. A vale update needs a new patch: run `bun patch @vvago/vale`, make the same change, and run `bun patch --commit node_modules/@vvago/vale`.
 
-The pre-commit hook runs the gate: `vp staged` formats and lints the staged files, then runs `vp check`, `vp run check:luau`, `vp run test:luau`, `vp run lint:prose`, `vp test --coverage` and `vp run test.mutation` in sequence. A failed step stops the commit. CI does not run for pull requests or for `develop`. The `ci` and `Mutation testing` jobs run for a push to `release/**` and `hotfix/**`, the branches that go into `main`.
+The pre-commit hook runs the gate: `vp staged` formats and lints the staged files, then runs `vp check`, `vp run check:luau`, `vp run test:luau`, `vp run lint:prose` and `vp test --coverage` in sequence. A failed step stops the commit. CI runs for pull requests and for pushes to `main`, `release/**` and `hotfix/**`. It does not run for pushes to `develop`.
 
 ### Releases
 
@@ -268,7 +293,7 @@ The repository uses git flow, with [git-flow-next](https://git-flow.sh/) (`brew 
 
 A release or a hotfix goes into `main` with a merge commit, and `main` then merges back into `develop`. The tag is the bare version, for example `0.1.0`, with no `v` prefix. The committed `.gitflow` file holds the settings: the branch names, the prefixes, merge commits on finish, and a push after finish. The first `git flow` command in a clone asks to copy `.gitflow` into the local configuration, and `git flow config sync` copies it again.
 
-`main` and `develop` accept a change only through a pull request. A pull request into `develop` merges with the `squash` or `rebase` method and needs no check. A pull request into `main` merges with a merge commit, and needs green `ci` and `Mutation testing` checks on a head that contains the head of `main`. A check counts for the commit it ran on, so the push of the release branch gives the checks of its pull request. The ruleset `develop` lets the `admin` and `maintain` roles bypass its rules, so that `git flow release finish` can push the merge of `main` into `develop`. The ruleset `main` has no bypass.
+`main` and `develop` accept a change only through a pull request. A pull request into `develop` merges with the `squash` or `rebase` method and needs no check. A pull request into `main` merges with a merge commit, and needs a green `ci` check on a head that contains the head of `main`. A check counts for the commit it ran on, so the push of the release branch gives the checks of its pull request. The ruleset `develop` lets the `admin` and `maintain` roles bypass its rules, so that `git flow release finish` can push the merge of `main` into `develop`. The ruleset `main` has no bypass.
 
 To make a release:
 
@@ -282,4 +307,4 @@ To make a release:
 
 A hotfix uses the same steps with `git flow hotfix start` and `git flow hotfix finish`. Its branch starts from `main`.
 
-The wiki publishes from `main`, so a wiki edit comes back as a pull request into `main` from the `wiki-sync` branch. A push with the workflow token starts no workflow, so after each create or update of the pull request, `wiki-pull.yml` starts `ci.yml` on `wiki-sync` with `gh workflow run`. On `wiki-sync`, the `ci` and `Mutation testing` jobs skip, and GitHub counts a skipped job as green, so the pull request can merge without a test run. The next finish merges it into `develop`.
+The wiki publishes from `main`, so a wiki edit comes back as a pull request into `main` from the `wiki-sync` branch. A push with the workflow token starts no workflow, so after each create or update of the pull request, `wiki-pull.yml` starts `ci.yml` on `wiki-sync` with `gh workflow run`. On `wiki-sync`, the `ci` job skips, and GitHub counts a skipped job as green, so the pull request can merge without a test run. The next finish merges it into `develop`.

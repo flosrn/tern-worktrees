@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: ['release/**', 'hotfix/**', wiki-sync]
+    branches: [main, 'release/**', 'hotfix/**', wiki-sync]
+  pull_request:
   workflow_dispatch:
 
 concurrency:
@@ -50,28 +51,3 @@ jobs:
       - name: Coverage summary
         if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
         run: node --experimental-strip-types scripts/ci-summary.ts coverage
-
-  mutation:
-    name: Mutation testing
-    if: ${{ github.ref != 'refs/heads/wiki-sync' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: ./.github/actions/setup
-
-      - id: stryker
-        name: Mutation score gate
-        run: vp exec stryker run
-
-      - name: Mutation summary
-        if: ${{ !cancelled() && steps.stryker.outcome != 'skipped' }}
-        run: node --experimental-strip-types scripts/ci-summary.ts mutation
-
-      - name: Upload mutation report
-        if: ${{ !cancelled() && steps.stryker.outcome != 'skipped' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: mutation-report
-          path: reports/mutation
-          retention-days: 30

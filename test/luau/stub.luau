@@ -545,11 +545,13 @@ end
 
 -- Loads and runs `opts.file` (default `window.luau`) in a new environment with a fake `tern`. Returns the
 -- commands, overrides, handlers and exports that the file registered, with the fake CLI runs, kv, clock and timers.
+-- The first deferred `finish notices` answers empty by default. `autoTick = false` leaves that response to the test.
 function Stub.load(opts: Options): Harness
 	local env: { [string]: string } = opts.env or {}
 	local files: { [string]: string } = opts.files or {}
 	local defaultCx = opts.cx
 	local formatting = false
+	local finishBootstrap = opts.autoTick ~= false
 	local loaded: Harness = {
 		commands = {},
 		overrides = {},
@@ -726,7 +728,22 @@ function Stub.load(opts: Options): Harness
 		},
 		process = {
 			run = function(argv: { string }, _opts: any, cb: (result: any, cx: any) -> ())
-				table.insert(loaded.runs, { argv = argv, cb = cb, respond = respond })
+				local run: Run = { argv = argv, cb = cb, respond = respond }
+				table.insert(loaded.runs, run)
+				if finishBootstrap and argv[2] == "finish" and argv[3] == "notices" then
+					finishBootstrap = false
+					table.insert(loaded.timers, {
+						at = loaded.clock,
+						cancelled = false,
+						fn = function(cx: any)
+							local index = table.find(loaded.runs, run)
+							if index ~= nil then
+								table.remove(loaded.runs, index)
+								run:respond('{"pending":[],"completed":[]}', 0, cx)
+							end
+						end,
+					})
+				end
 			end,
 		},
 		json = {

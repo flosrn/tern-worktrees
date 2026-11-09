@@ -72,6 +72,12 @@ _Avoid_: Dirty files, losses
 The removal of a managed worktree and, as the teardown policy says, of its branch. The toast after a teardown says `deleted worktree`. That is the text the user sees, not a name for the step.
 _Avoid_: Cleanup, delete, close
 
+**Delivery finish**:
+The consented teardown at the real end of an omp delivery. It uses a saved list of managed worktrees with merged pull requests in one repository. It waits for the caller to exit and reports the result after the tab closes. It preserves work to lose, busy worktrees and blocked orchestration lanes.
+
+**Finish cause**:
+The stable `code` that identifies why delivery finish kept a target or reported an execution error. Each entry has `path`, `code` and optional `detail` containing an external exception message for inspection. Automation matches the code. Tern shows a readable label. The [finish cause table](../skills/tern-worktrees/SKILL.md#finish-causes) lists the codes. This term does not change the `reason` fields of `clean`.
+
 **Teardown policy**:
 The rule that tells a teardown what to do with the branch: keep it, delete it when merged, or delete it.
 _Avoid_: Delete mode, cleanup policy

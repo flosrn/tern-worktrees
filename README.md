@@ -1,10 +1,11 @@
 # tern-worktrees
 
-Git worktrees as [Tern](https://docs.stencil.so/tern) tabs, in three parts:
+Git worktrees as [Tern](https://docs.stencil.so/tern) tabs, in four parts:
 
 - The `tern-worktrees` Tern plugin. `cmd+shift+w` (W for worktree) opens the branch picker, and the branch you pick opens as a worktree tab. The command palette also lists the branches and pull requests of the current repository as worktree rows. When you close a worktree tab, a Tern picker offers to keep the worktree or tear it down.
 - The `tern-wt` CLI, the one implementation of each git and GitHub step. The plugin runs it, and agents run it directly.
 - The `tern-worktrees` omp skill, the contract that agents follow.
+- The bundled omp extension, which offers consented delivery finish through the built-in `ask` tool.
 
 Each tern-managed worktree lives in the worktree root, at `<root>/<repo>/<slug>`. The slug is the branch name with each `/` changed to `-`. The worktree root is `$TERN_WT_HOME/worktrees` when you set `TERN_WT_HOME`, else the omp worktree root when omp is installed, else `~/.tern-wt/worktrees`. See [Work with omp](#work-with-omp).
 
@@ -21,11 +22,14 @@ Each tern-managed worktree lives in the worktree root, at `<root>/<repo>/<slug>`
 tern plugin install github.com/riicodespretty/tern-worktrees
 ```
 
-Each time Tern loads the plugin in a window, the plugin runs `tern-wt setup` from its installed copy: when the window starts, and when `tern plugin install` adds or updates the plugin in an open window. `setup` links `~/.local/bin/tern-wt` to the CLI and `~/.agents/skills/tern-worktrees` to the skill, the two in that copy. When it makes or changes a link, the toast `Linked tern-wt and the tern-worktrees skill` shows. When the links are correct, no toast shows. When a file or a folder that is not a symbolic link is at a link path, `setup` changes nothing, and a `Setup failed: …` toast gives the path.
+Tern runs `tern-wt setup` from its installed plugin copy each time the plugin loads in a window. This occurs when the window starts or `tern plugin install` adds or updates the plugin in an open window. `setup` links `~/.local/bin/tern-wt` to the CLI and `~/.agents/skills/tern-worktrees` to the skill. It links the omp agent directories' `extensions/tern-worktrees-omp` to the bundled `omp` package. Setup covers the default agent, active agent and real profiles on disk, using omp configuration paths. A new or changed link shows the toast `Linked tern-wt, the tern-worktrees skill and the OMP extension`. Correct links show no toast. A conflicting real file, folder or unrelated extension link gives `path_conflict` before setup changes links.
 
 `setup` also removes the previous `~/.omp/agent/skills/tern-worktrees` link when its target is the bundled skill of a package named `tern-worktrees`. It preserves real folders and links to other targets. The JSON `links` list reports that link and its target with action `removed`.
 
 Put `~/.local/bin` on your `PATH`, so that your shell and your agents find `tern-wt`.
+
+Restart a running omp session to load the extension. New sessions find it through omp's native extension loader. Without the extension or built-in `ask`, the manual teardown rules still apply. This grants no teardown consent.
+Run `tern-wt setup` again after creating a named omp profile. Setup does not create profiles or modify omp configuration or plugin lock files.
 
 To update the plugin, run:
 
@@ -33,7 +37,7 @@ To update the plugin, run:
 tern plugin install github.com/riicodespretty/tern-worktrees --force
 ```
 
-To remove the plugin, remove it from Tern, then delete the two links:
+To remove the plugin, remove it from Tern, then delete its CLI and skill links. Before deleting an `extensions/tern-worktrees-omp` link, make sure it points to this package's `omp` directory. Use the agent directories reported by `tern-wt setup`. Keep unrelated links and real directories.
 
 ```sh
 tern plugin remove tern-worktrees
@@ -289,6 +293,7 @@ tern-wt heavy --status           # Inspect slots and host memory
 - `env`: prints the repository environment, with `TERN_WT_PORT` for a linked branch worktree, as JSON or POSIX-quoted exports with `--shell`.
 - `heavy`: runs a command with the repository environment and services in a host-wide slot, or reports slots and memory with `--status`.
 - `remove`: tears down a tern-managed worktree as the teardown policy says, and closes its tabs. Before removal it checks the target blocks for running processes. See the refusal and overrides below.
+- `finish`: saves a delivery teardown plan, records an explicit selection and reports its result. The omp integration asks through the built-in `ask` tool before arming it. See [Finish a delivery](#finish-a-delivery).
 - `clean --repo <dir> [--apply]`: plans repository-scoped removals without writing. Applies a new plan only with `--apply`. See [Plan repository cleanup](#plan-repository-cleanup) for approval, output and safety rules.
 - `list`: lists the tern-managed worktrees, each with its `owner`, base `port` (null for a detached `HEAD`) and number of `changed` files. `--all` adds the omp-owned worktrees. When git cannot count the changes of a worktree, for example because a submodule has a broken `.git` file, `list` still shows that worktree and adds a warning.
 - `branches`: lists the branches, the open pull requests and the worktrees of a repository, with the owner of each worktree and `main` true for the main checkout. `--offline` reads only local refs, with no fetch and no pull requests.
@@ -298,7 +303,7 @@ tern-wt heavy --status           # Inspect slots and host memory
 - `clone`: clones a GitHub repository to the clone root.
 - `new-repo`: makes a GitHub repository, then clones it.
 - `config`: prints the options file with each default filled in.
-- `setup`: links `~/.local/bin/tern-wt` and the skill to the package that it runs from. The plugin runs it each time it loads in a Tern window.
+- `setup`: links `~/.local/bin/tern-wt`, the skill and the bundled omp extension to the package that it runs from. The plugin runs it each time it loads in a Tern window.
 
 Commands print one JSON object. Two commands use a different output: `env --shell` prints shell exports, and heavy command execution passes through the child process streams and exit code. CLI failures exit 1 with one of these error codes: `bad_args`, `config_invalid`, `worktree_config_invalid`, `setup_failed`, `service_failed`, `docker_missing`, `not_a_repo`, `not_cloned`, `not_managed`, `path_conflict`, `worktree_exists_elsewhere`, `dirty_worktree`, `busy_tabs`, `git_failed`, `gh_failed`, `omp_failed`, `tern_failed`. `service_failed` names the service and the failure in its message. `docker_missing` means the Docker executable is unavailable. See the skill for recovery steps.
 
@@ -313,6 +318,30 @@ The Carly `create` export has the signature `(repo: string, branch: string?, new
 By default, `remove` refuses busy blocks with `busy_tabs` before removal. `--close-busy-tabs` skips the process check with approval to close busy blocks, `--force` only discards work to lose, and `--keep-tab` skips all Tern inspection and keeps tabs open. Read the [remove rules](skills/tern-worktrees/SKILL.md#remove) for the idle-process rule, `error.blocks`, inspection failures and the limits of this snapshot check.
 
 The Carly `remove(path, force?, closeBusyTabs?)` export uses the process check by default. Set the third argument, `closeBusyTabs`, to `true` only with approval to close busy blocks. It passes `--close-busy-tabs` and skips process inspection. The second argument, `force`, passes `--force` and only discards work to lose.
+
+### Finish a delivery
+
+At the real end of a delivery, the omp integration offers three alternatives through omp 18.18.3's built-in `ask` HTML form:
+
+- Remove only the managed worktrees of this session or run.
+- Also remove other managed worktrees of this repository that have merged pull requests.
+- Keep all worktrees and this tab, the recommended selection.
+
+The form shows three alternatives: `Supprimer seulement mes worktrees`, `Supprimer aussi les autres PR fusionnées du dépôt` and `Ne rien supprimer`. `Ne rien supprimer` is selected by default. Only a valid answer to the saved form can approve teardown. An error, cancellation, timeout, text entered through Other or a mismatched answer keeps all worktrees and the tab. An unavailable built-in `ask` or an older API that rejects the HTML form also keeps everything. The extension does not retry through the former `questions` API.
+
+The preview names the canonical paths, pull requests and commits. Approval applies only to that saved list. A symbolic alias cannot add a hidden target, and a subsequent scope change cannot expand the approved selection. Changed or busy worktrees, blocked orchestration lanes and targets without proof of safety stay, with a cause. A closed issue or a closed pull request without a merge is not merge proof. The main checkout stays. Local branches follow the teardown policy. Remote branches stay.
+
+After approval, the agent writes its last delivery report. An external worker waits for the caller to exit before removing its worktree and closing its tab. The omp history stays. Tern reports removed targets, kept targets and errors without using the removed tab. Without built-in `ask`, clear readiness or successful worker startup, the worktrees and tab stay.
+
+Finish's `keep` and `errors` entries contain `path`, a stable `code` for automation, and optional `detail` from an external exception for inspection. Match `code`, not `detail` or the label in Tern. Tern translates the codes into readable labels and reports the counts of removed worktrees, kept worktrees and errors. Use `tern-wt finish status <id>` for the full result. Saved finish state uses version `2`. Older state that is not compatible is rejected without teardown or conversion. Create a new plan and approve its preview.
+
+Orchestration asks once, through the coordinator after all requested deliveries and jobs complete. Workers do not ask after each ticket. A composed delivery with more work explicitly scheduled waits until its last requested delivery.
+
+For standalone sessions without a declared scope, automatic detection looks for a new merge after tool use. It waits for jobs and messages to settle and tries once for each delivery episode. Missing ask, unavailable CI proof or a CLI error does not start a continuation loop. Use an explicit `ready` to examine readiness again. A turn ending alone does not prove that a multi-delivery task is complete. Declare a composed scope before its first delivery. Signal `ready` only after the last delivery.
+
+Unlike `clean`, `finish` does not prune Docker resources, discard work to lose or use closed issues to authorize teardown. Manual tab closure keeps its picker.
+
+See the [finish command contract](skills/tern-worktrees/SKILL.md#finish) for saved plans, state inspection and fallbacks when tools are unavailable.
 
 ### Plan repository cleanup
 
@@ -347,6 +376,8 @@ Process removal is limited to attributable repository processes on Linux and mac
 ## Design and glossary
 
 [`docs/`](docs/README.md) holds the design and the glossary. CI publishes it to the [wiki](https://github.com/riicodespretty/tern-worktrees/wiki).
+
+See [Development](docs/README.md#development) for the checks. Mutation testing is optional and does not block delivery.
 
 ## License
 

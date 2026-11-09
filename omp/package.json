@@ -1,0 +1,10 @@
+{
+  "name": "tern-worktrees-omp",
+  "private": true,
+  "type": "module",
+  "omp": {
+    "extensions": [
+      "index.ts"
+    ]
+  }
+}

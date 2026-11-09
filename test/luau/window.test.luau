@@ -195,17 +195,20 @@ test("window_start writes the worktree index from list --all", function()
 	eq(omp.owner, "omp", "owner of the omp-owned worktree")
 end)
 
--- A `tern-wt setup` answer with the action `bin` for the CLI link and `skill` for the skill link.
-local function setup_answer(bin: string, skill: string): string
+-- A `tern-wt setup` answer with an action for the CLI, skill and OMP extension links.
+local function setup_answer(bin: string, skill: string, omp: string): string
 	local vars = {
 		binLink = "/home/u/.local/bin/tern-wt",
 		binTarget = "/p/bin/tern-wt",
 		skillLink = "/home/u/.agents/skills/tern-worktrees",
 		skillTarget = "/p/skills/tern-worktrees",
+		ompLink = "/home/u/.omp/agent/extensions/tern-worktrees-omp",
+		ompTarget = "/p/omp",
 	}
 	return Stub.answer("setup", vars, function(answer: any)
 		answer.links[1].action = bin
 		answer.links[2].action = skill
+		answer.links[3].action = omp
 	end)
 end
 
@@ -229,18 +232,20 @@ local function toasts_after_setup(stdout: string, status: number, stderr: string
 	return table.concat(lines, "; ")
 end
 
-local LINKED = "info Linked tern-wt and the tern-worktrees skill"
+local LINKED = "info Linked tern-wt, the tern-worktrees skill and the OMP extension"
 
 for _, case in
 	{
-		{ what = "both links created", bin = "created", skill = "created", toasts = LINKED },
-		{ what = "one link replaced", bin = "kept", skill = "replaced", toasts = LINKED },
-		{ what = "one link created", bin = "created", skill = "kept", toasts = LINKED },
-		{ what = "both links kept", bin = "kept", skill = "kept", toasts = "" },
+		{ what = "all links created", bin = "created", skill = "created", omp = "created", toasts = LINKED },
+		{ what = "one link replaced", bin = "kept", skill = "replaced", omp = "kept", toasts = LINKED },
+		{ what = "one link created", bin = "created", skill = "kept", omp = "kept", toasts = LINKED },
+		{ what = "the OMP extension created", bin = "kept", skill = "kept", omp = "created", toasts = LINKED },
+		{ what = "the OMP extension replaced", bin = "kept", skill = "kept", omp = "replaced", toasts = LINKED },
+		{ what = "all links kept", bin = "kept", skill = "kept", omp = "kept", toasts = "" },
 	}
 do
 	test(`loading the window half runs setup, and an answer with {case.what} toasts "{case.toasts}"`, function()
-		eq(toasts_after_setup(setup_answer(case.bin, case.skill), 0), case.toasts, "toasts")
+		eq(toasts_after_setup(setup_answer(case.bin, case.skill, case.omp), 0), case.toasts, "toasts")
 	end)
 end
 

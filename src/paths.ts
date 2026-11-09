@@ -101,12 +101,7 @@ const ompOverride = (value: string | null | undefined, home: string): string | u
   return dir.length > 1 && dir.endsWith(path.sep) ? dir.slice(0, -1) : dir;
 };
 
-/**
- * The omp data root. It is the omp config root, `~/<PI_CONFIG_DIR or .omp>`, plus `profiles/<profile>` for a named profile.
- * On Linux and macOS, when the agent directory is the default one and `$XDG_DATA_HOME/omp` (or `$XDG_DATA_HOME/omp/profiles/<profile>`)
- * is on disk, it is that directory.
- */
-const ompDataRoot = ({ env, exists, home, platform }: OmpDirsEnv): string => {
+const ompConfigDirs = ({ env, home }: OmpDirsEnv) => {
   const profile = ompProfileName(env.OMP_PROFILE ?? env.PI_PROFILE);
   const baseRoot = path.join(home, nonEmpty(env.PI_CONFIG_DIR) ?? '.omp');
   const configRoot = profile === undefined ? baseRoot : path.join(baseRoot, 'profiles', profile);
@@ -114,7 +109,21 @@ const ompDataRoot = ({ env, exists, home, platform }: OmpDirsEnv): string => {
   const piProfile = ompProfileName(env.PI_PROFILE);
   const profileDerived = piProfile !== undefined && agentEnv === path.join(baseRoot, 'profiles', piProfile, 'agent');
   const agentOverride = profile === undefined && !profileDerived ? agentEnv : undefined;
-  const defaultAgent = agentOverride === undefined || path.resolve(agentOverride) === path.join(configRoot, 'agent');
+  return { agentDir: agentOverride ?? path.join(configRoot, 'agent'), configRoot, profile };
+};
+
+/** The active omp agent directory, where omp loads native extensions. */
+export const ompAgentDir = (from: OmpDirsEnv): string => ompConfigDirs(from).agentDir;
+
+/**
+ * The omp data root. It is the omp config root, `~/<PI_CONFIG_DIR or .omp>`, plus `profiles/<profile>` for a named profile.
+ * On Linux and macOS, when the agent directory is the default one and `$XDG_DATA_HOME/omp` (or `$XDG_DATA_HOME/omp/profiles/<profile>`)
+ * is on disk, it is that directory.
+ */
+const ompDataRoot = (from: OmpDirsEnv): string => {
+  const { env, exists, platform } = from;
+  const { profile, configRoot, agentDir } = ompConfigDirs(from);
+  const defaultAgent = path.resolve(agentDir) === path.join(configRoot, 'agent');
   const xdgData = nonEmpty(env.XDG_DATA_HOME);
   if ((platform === 'linux' || platform === 'darwin') && defaultAgent && xdgData !== undefined) {
     const appRoot = path.join(xdgData, 'omp');
