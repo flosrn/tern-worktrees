@@ -1,6 +1,6 @@
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { run } from '../src/commands/finish.ts';
 import type { FinishPlan } from '../src/finish-types.ts';
 import { ghFixture, git, managedPath, tempDir, tmpRepo, useGithubOrigin, useSandbox, writeTernLs } from './helpers.ts';
@@ -9,6 +9,10 @@ describe('finish process attribution', () => {
   beforeEach(() => {
     useSandbox();
     writeTernLs({});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it.each([false, true])('protects only the target attributed to an uncertain process: located=%s', async located => {
@@ -57,6 +61,7 @@ describe('finish process attribution', () => {
     writeFileSync(path.join(bin, 'lsof'), `#!/bin/sh\nprintf 'p${process.pid}\\0fcwd\\0n${target}\\0${stranger}'\n`, { mode: 0o755 });
     vi.stubEnv('PATH', `${bin}:${process.env.PATH ?? ''}`);
     vi.stubEnv('TERN_WT_PROC_ROOT', '');
+    vi.stubGlobal('process', { ...process, platform: 'darwin' });
     // SAFETY: The public plan command returns the FinishPlan contract.
     const plan = (await run(['plan', '--repo', dir, '--current', target])) as FinishPlan;
     expect(plan.ready).toBe(!located);
