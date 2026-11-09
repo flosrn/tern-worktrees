@@ -149,7 +149,7 @@ const renderMutation = (reportPaths: string[]): string => {
   const head = summariseMutation(reportPaths);
   const lines = ['## Mutation Test Report', ''];
   if (!head) {
-    lines.push('No mutation report was produced. The mutation job did not reach the reporting step.');
+    lines.push('No mutation report was produced.');
     return lines.join('\n');
   }
   const { counts } = head;
@@ -172,7 +172,7 @@ const renderMutation = (reportPaths: string[]): string => {
     lines.push(`| \`${s.file}:${s.line}\` | ${s.mutator} | ${s.status} |`);
   }
   if (head.survivors.length > shown.length) {
-    lines.push('', `Showing ${shown.length} of ${head.survivors.length}. The full report is in the mutation-report artifact.`);
+    lines.push('', `Showing ${shown.length} of ${head.survivors.length}. The full report is in ${reportPaths.join(', ')}.`);
   }
   lines.push('', '</details>');
   return lines.join('\n');

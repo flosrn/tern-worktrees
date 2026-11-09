@@ -33,9 +33,11 @@ let sandbox: Sandbox;
 let home: string;
 let binLink: string;
 let skillLink: string;
+let ompLink: string;
 
 const binTarget = path.join(PKG, 'bin', 'tern-wt');
 const skillTarget = path.join(PKG, 'skills', 'tern-worktrees');
+const ompTarget = path.join(PKG, 'omp');
 
 const isAbsent = (target: string): boolean => {
   try {
@@ -46,9 +48,10 @@ const isAbsent = (target: string): boolean => {
   }
 };
 
-const expectedLinks = (binAction: string, skillAction: string = binAction): object[] => [
+const expectedLinks = (binAction: string, skillAction: string = binAction, ompAction: string = binAction): object[] => [
   { action: binAction, path: binLink, target: binTarget },
   { action: skillAction, path: skillLink, target: skillTarget },
+  { action: ompAction, path: ompLink, target: ompTarget },
 ];
 
 /** Runs `setup`, and expects a `path_conflict` for `blocked` with a message that holds `message`. */
@@ -245,18 +248,45 @@ describe(setup, () => {
     vi.stubEnv('HOME', home);
     binLink = path.join(home, '.local', 'bin', 'tern-wt');
     skillLink = path.join(home, '.agents', 'skills', 'tern-worktrees');
+    ompLink = path.join(home, '.omp', 'agent', 'extensions', 'tern-worktrees-omp');
     race.before = noRace;
   });
 
-  it('makes both links, then keeps them on a second run, and does not call tern', async () => {
-    await expect(cliJson(['setup'])).resolves.toStrictEqual(contract('setup', { binLink, binTarget, skillLink, skillTarget }));
-    expect([readlinkSync(binLink), readlinkSync(skillLink)]).toStrictEqual([binTarget, skillTarget]);
+  it('makes all links, then keeps them on a second run, and does not call tern', async () => {
+    await expect(cliJson(['setup'])).resolves.toStrictEqual(contract('setup', { binLink, binTarget, ompLink, ompTarget, skillLink, skillTarget }));
+    expect([readlinkSync(binLink), readlinkSync(skillLink), readlinkSync(ompLink)]).toStrictEqual([binTarget, skillTarget, ompTarget]);
     raceOnce('symlinkSync', failOnSymlink);
     expect(setup([])).toStrictEqual({ links: expectedLinks('kept') });
     expect(ternLog()).toStrictEqual([]);
   });
 
-  it('makes both links when Tern has a copied install of the plugin', () => {
+  it.each(['accessSync', 'symlinkSync'] as const)('keeps the extension installed concurrently at %s', call => {
+    let occupied = false;
+    race.before = (made, target): void => {
+      if (occupied || made !== call || (call === 'symlinkSync' && target !== ompLink)) {
+        return;
+      }
+      occupied = true;
+      mkdirSync(path.dirname(ompLink), { recursive: true });
+      symlinkSync(ompTarget, ompLink);
+    };
+    expect(setup([])).toStrictEqual({ links: expectedLinks('created', 'created', 'kept') });
+    expect(readlinkSync(ompLink)).toBe(ompTarget);
+  });
+
+  it('preserves a foreign extension installed after planning but before link creation', () => {
+    const foreign = tempDir('racing-extension');
+    race.before = (call, target): void => {
+      if (call === 'symlinkSync' && target === ompLink) {
+        race.before = noRace;
+        symlinkSync(foreign, ompLink);
+      }
+    };
+    expectPathConflict(ompLink, SYMLINK_EEXIST);
+    expect(readlinkSync(ompLink)).toBe(foreign);
+  });
+
+  it('makes all links when Tern has a copied install of the plugin', () => {
     mkdirSync(path.join(sandbox.configDir, 'plugins', 'tern-worktrees'), { recursive: true });
     expect(setup([])).toStrictEqual({ links: expectedLinks('created') });
     expect([readlinkSync(binLink), readlinkSync(skillLink), ternLog()]).toStrictEqual([binTarget, skillTarget, []]);
@@ -342,19 +372,20 @@ describe(setup, () => {
     expect(() => setup(['--unknown'])).toThrow('Unknown option');
     expect(isAbsent(binLink)).toBeTruthy();
     expect(isAbsent(skillLink)).toBeTruthy();
+    expect(isAbsent(ompLink)).toBeTruthy();
   });
 
   it('replaces a link to another target', () => {
     linkToOther(binLink);
     linkToOther(skillLink);
-    expect(setup([])).toStrictEqual({ links: expectedLinks('replaced') });
+    expect(setup([])).toStrictEqual({ links: expectedLinks('replaced', 'replaced', 'created') });
     expect([readlinkSync(binLink), readlinkSync(skillLink)]).toStrictEqual([binTarget, skillTarget]);
   });
 
   it.each(SAME_TARGET_RACES)('keeps a CLI link that it planned as %s when a second setup links it to the same target at %s', (_planned, _moment, before, call) => {
     before();
     raceOnce(call, linkBinToTarget);
-    expect(setup([])).toStrictEqual({ links: expectedLinks('kept', 'created') });
+    expect(setup([])).toStrictEqual({ links: expectedLinks('kept', 'created', 'created') });
     expect([readlinkSync(binLink), readlinkSync(skillLink)]).toStrictEqual([binTarget, skillTarget]);
   });
 
@@ -362,7 +393,7 @@ describe(setup, () => {
     before();
     raceOnce(call, occupy);
     expectPathConflict(binLink, `${binLink} ${reason}`);
-    expect([binLinkContent(), isAbsent(skillLink)]).toStrictEqual([left, true]);
+    expect([binLinkContent(), isAbsent(skillLink), isAbsent(ompLink)]).toStrictEqual([left, true, true]);
   });
 
   it('raises path_conflict with the error of symlinkSync when it fails for a different cause', () => {
@@ -372,7 +403,7 @@ describe(setup, () => {
     } finally {
       chmodSync(path.dirname(binLink), 0o700);
     }
-    expect([isAbsent(binLink), isAbsent(skillLink)]).toStrictEqual([true, true]);
+    expect([isAbsent(binLink), isAbsent(skillLink), isAbsent(ompLink)]).toStrictEqual([true, true, true]);
   });
 
   it.each(LINK_BLOCKERS)('raises path_conflict on %s and leaves it as it was', (_label, linkPath, occupy, isUnchanged) => {
@@ -380,19 +411,19 @@ describe(setup, () => {
     mkdirSync(path.dirname(link), { recursive: true });
     occupy(link);
     expectPathConflict(link, `${link} exists and is not a symbolic link`);
-    expect([binLink, skillLink].map(target => lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink() === true)).toStrictEqual([false, false]);
+    expect([binLink, skillLink, ompLink].map(target => lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink() === true)).toStrictEqual([false, false, false]);
     expect(isUnchanged(link)).toBeTruthy();
   });
 
   it.each(PARENT_BLOCKERS)('raises path_conflict on %s before it changes anything', (_label, occupy, reason) => {
     const blocked = occupy();
     expectPathConflict(blocked, `${blocked} ${reason}`);
-    expect([isAbsent(binLink), isAbsent(skillLink)]).toStrictEqual([true, true]);
+    expect([isAbsent(binLink), isAbsent(skillLink), isAbsent(ompLink)]).toStrictEqual([true, true, true]);
   });
 
-  it('keeps both links on a second run when their parent dirs are read-only', () => {
+  it('keeps all links on a second run when their parent dirs are read-only', () => {
     setup([]);
-    const parents = [path.dirname(binLink), path.dirname(skillLink)];
+    const parents = [path.dirname(binLink), path.dirname(skillLink), path.dirname(ompLink)];
     for (const parent of parents) {
       chmodSync(parent, 0o500);
     }
@@ -403,7 +434,7 @@ describe(setup, () => {
         chmodSync(parent, 0o700);
       }
     }
-    expect([readlinkSync(binLink), readlinkSync(skillLink)]).toStrictEqual([binTarget, skillTarget]);
+    expect([readlinkSync(binLink), readlinkSync(skillLink), readlinkSync(ompLink)]).toStrictEqual([binTarget, skillTarget, ompTarget]);
   });
 
   it('makes the links through a parent that is a symbolic link to a dir', () => {

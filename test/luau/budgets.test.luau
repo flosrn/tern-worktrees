@@ -13,6 +13,7 @@ test("load registers commands without reading files or kv; status stays memory-o
 	})
 	local plugin = Stub.load({ env = Stub.ENV, kv = kv :: any, autoTick = false })
 	eq(reads, 0, "kv reads at load")
+	eq(#plugin.runs, 0, "no process runs at load")
 	eq(plugin:status("/r/app"), nil, "status before hydration")
 	eq(reads, 0, "kv reads in status")
 	plugin:tick(0)
@@ -24,6 +25,8 @@ test("cwd bursts defer native inspection and resolve only the latest path", func
 	local plugin = Stub.load({ env = Stub.ENV, cx = cx, autoTick = false })
 	plugin:tick(0)
 	plugin:take("setup")
+	eq(plugin:pending_line("finish"), "finish notices", "notices resume on the deferred tick")
+	plugin:answer("finish", '{"pending":[],"completed":[]}', 0, cx)
 	plugin.handlers.cwd({ pane = 1, path = "/r/old" }, cx)
 	plugin.handlers.cwd({ pane = 1, path = "/r/latest" }, cx)
 	eq(#plugin.runs, 0, "runs during cwd hook")
@@ -52,6 +55,16 @@ test("palette rows register in batches after the process callback", function()
 		end
 	end
 	eq(count, 3, "rows after deferred registration")
+end)
+
+test("the default fixture settles only the initial empty notices scan", function()
+	local cx = Stub.cx({ { pane = 1, tab = 1, cwd = "/r/app" } }, 1)
+	local plugin = Stub.load({ env = Stub.ENV, cx = cx })
+	plugin:tick(0)
+	eq(#plugin:pending("finish"), 0, "empty notices bootstrap answered")
+	plugin.commands["finish-watch"].run(cx)
+	plugin:tick(0)
+	eq(plugin:pending_line("finish"), "finish notices", "later notices remain under test control")
 end)
 
 runner.finish()

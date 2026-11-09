@@ -8,6 +8,10 @@ fi
 key=$(printf '%s_' "$@" | sed 's/_$//' | tr '/ ' '__')
 fixture="${FAKE_GH_DIR:-}/$key.json"
 if [ -n "${FAKE_GH_DIR:-}" ] && [ -f "$fixture" ]; then
+	if [ -f "${fixture%.json}.status" ]; then
+		cat "$fixture"
+		exit "$(cat "${fixture%.json}.status")"
+	fi
 	exec cat "$fixture"
 fi
 echo 'fake gh: no fixture' >&2

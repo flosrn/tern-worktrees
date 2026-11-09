@@ -82,6 +82,7 @@ export const useSandbox = (): Sandbox => {
   vi.stubEnv('XDG_STATE_HOME', path.join(root, 'state'));
   vi.stubEnv('TERN_WT_HOME', sandbox.wtHome);
   vi.stubEnv('TERN_PLUGIN_DATA', sandbox.pluginData);
+  vi.stubEnv('TERN_PANE', '');
   vi.stubEnv('TERN_WT_PROC_ROOT', path.join(root, 'proc'));
   mkdirSync(path.join(root, 'proc'));
   vi.stubEnv('TERN_CONFIG_DIR', sandbox.configDir);

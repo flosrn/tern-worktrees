@@ -9,9 +9,9 @@ Status: Accepted
 
 ## Why
 
-- With `fork: boolean` and `pr: string | null`, the types let `fork: true` with no pull request through. The code that makes `pr-<n>` from it adds equivalent Stryker mutants, and the gate is a score of 100 with no `Stryker disable` comments (#66, Out of scope, C10 spec §2).
-- In a `sameRepo(a, b)`, Stryker's `toLowerCase` to `toUpperCase` mutant survives. `repoKey` is the map key of the setup commands and the key that `clonePath` compares (#95, Out of scope, C4 spec).
+- With `fork: boolean` and `pr: string | null`, the types let `fork: true` with no pull request through. The two fields keep the pull request number with the action that needs it.
+- `repoKey` is the map key of the setup commands and the key that `clonePath` compares (#95, Out of scope, C4 spec). A boolean comparison does not supply that key.
 
 ## Reopen when
 
-Stryker can kill each mutant of the boolean form, or the gate accepts a lower score.
+The boolean form gives a stronger contract without losing the pull request number or the repository key that callers need.

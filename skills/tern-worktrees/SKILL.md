@@ -1,6 +1,6 @@
 ---
 name: tern-worktrees
-description: Use to create, list, relocate or tear down git worktrees as Tern tabs with tern-wt, plan repository cleanup, prepare their repository environment, or run heavy commands in host-wide slots. Replaces Orca worktrees.
+description: Use to create, list, relocate or tear down git worktrees as Tern tabs with tern-wt, finish a merged delivery with explicit teardown consent, plan repository cleanup, prepare repository environments, or run heavy commands in host-wide slots. Replaces Orca worktrees.
 ---
 
 # tern-worktrees
@@ -21,6 +21,7 @@ description: Use to create, list, relocate or tear down git worktrees as Tern ta
 - Do not run `omp worktree clear` without `--dry-run` first. With or without `--all`, it deletes each worktree that omp sees as orphaned, and omp can see a live tern-managed worktree as orphaned, for example with `worktree.useRelativePaths=true` or after the main checkout moved.
 - For repository cleanup, run `clean --repo <dir>` first and show the user its `remove`, `keep` and `warnings`. Run `clean --repo <dir> --apply` only after the user explicitly says yes to that plan. A request to examine or plan cleanup is not approval to apply it.
 - Treat `clean` as repository-scoped. Keep uncertain resources. Do not supplement it with host-wide Docker, volume or temporary-file pruning.
+- At the real end of a merged delivery, use the [delivery finish](#finish) lifecycle when available. Register the run's paths and blocked lanes. Signal readiness only after all requested deliveries and jobs complete. A worker returns delivery evidence to its coordinator. Only the coordinator asks for teardown.
 
 ## Output
 
@@ -128,6 +129,58 @@ A worktree with a changed file, a new file that git does not track, a submodule 
 
 Output: `{"removed", "repo", "branch", "branchDeleted", "branchKept", "closedBlocks", "warnings"}`. `repo` is the main checkout of the removed worktree. `branch` is null for a detached `HEAD`. `branchKept` tells why `remove` kept the branch: `policy` for the teardown policy `worktree`, `not_merged` for a branch that is not merged, also when the merge check failed, and `not_deleted` when `git branch -D` failed. It is null when `remove` deleted the branch, and for a detached `HEAD`. A branch that the policy keeps because it is not merged adds the warning `kept local branch <branch>: not merged`, and a failed delete adds `branch <branch> not deleted: <reason>`. That warning comes first in `warnings`.
 
+### `finish`
+
+The omp extension uses the real built-in `ask` at the end of a completed delivery. The preview names the selected worktree paths, merged pull requests and commit IDs. Three alternatives are available. Remove this session or run's managed worktrees, add other merged managed worktrees of this repository, or keep all worktrees. Keeping everything is recommended. A composed caller with more requested work waits until its last delivery. Orchestration asks once through its coordinator and preserves blocked lanes.
+
+Use the `worktree_finish` tool's `scope` action at the start of a composed delivery to register its boundary and paths. The preview uses canonical paths, and the offered selections stay fixed even if a subsequent scope call adds paths. A declared scope defers automatic offers until `ready`. Use `ready` only when all requested work and jobs complete, or to examine readiness again after a failed automatic check. The tool does not accept a teardown selection. Consent comes only from the matching built-in `ask` result. A dialog, shell command or model-authored selection cannot grant consent. If the tool or built-in `ask` is unavailable, report that limit and preserve the worktrees and tab.
+
+The native contract is omp 18.18.3's HTML-form `ask`, not the former `questions` input. When the extension offers a preview, call the built-in `ask` once. Use the supplied `html` and French `i` without changes. The value of `i` is `Recueillir le choix explicite de Florian sur les worktrees du plan enregistré, sans suppression par défaut.` The host strips `i` before the hooks. The hooks accept only the saved `{html}` input and the matching tool call ID. Preserve the supplied form unchanged. It has three radio values, `current`, `merged` and `none`, with labels `Supprimer seulement mes worktrees`, `Supprimer aussi les autres PR fusionnées du dépôt` and `Ne rien supprimer`. Only `none` is selected by default.
+
+The native result must contain matching representations of the same answer: the `User answers:` JSON text maps the saved form name to its radio value, and `details.answers` carries the matching name, legend and label. An error, cancellation, timeout, Other text, changed form or disagreement between those representations cannot arm teardown. Preserve all worktrees and the tab, and report the limit. An older ask API that rejects the form gets the same safe outcome. Do not retry with `questions` or a different consent mechanism.
+
+After approval, write the delivery report before the caller exits. Report the teardown as armed, not completed. The external executor waits for the caller to exit and examines each target again. It closes only the tabs of removed worktrees. Tern reports the actual result without using the removed tab. Keep omp history. Manual tab closure still uses its picker.
+
+Before reporting completed work, read [Delivery finish limits](../../docs/README.md#delivery-finish-limits) for connected RPC exit and CI proof. Report unresolved proof as a limit. Do not claim that no workflow applies.
+
+The CLI protocol is:
+
+```sh
+tern-wt finish plan --repo <dir> [--current <worktree>] [--owned <path> ...] [--exclude <path> ...] [--pid <pid>] [--block <block>] [--session <id>]
+tern-wt finish arm <id> --choice current|merged|none [--selected <path> ...]
+tern-wt finish status <id>
+```
+
+`plan` examines Git refs and worktrees without changing them, then saves a private local plan. It returns `id`, `repo`, `current`, `ready`, `candidates`, `keep` and `warnings`. Each candidate has `path`, `branch`, `head` and a `pr` proof with `number`, `url`, `headRefOid`, `mergeCommit` and `mergedAt`. Each kept target has `path`, `code` and optional `detail`, as defined below. `ready` needs merged PR evidence at the same commit IDs as the run and successful applicable post-merge workflows.
+
+Only call `arm` after explicit consent to that saved preview. Supply `--selected` for each approved canonical path. The CLI compares this set with the saved selection before it starts a worker. A mismatch stops arm without teardown. `current` selects its eligible current and registered run paths. `merged` selects its saved candidates, and `none` records refusal with an empty selection. It returns `id`, `status` and `selected`. A PR merged after approval cannot expand the selection. Do not replace this lifecycle with `remove --force`, `--keep-tab` or `--close-busy-tabs`.
+
+`status` returns the plan plus `status`, `selected`, `removed` and `errors`. States are `planned`, `armed`, `declined`, `running` and `completed`. Removed entries have `path`, `branchDeleted` and `closedBlocks`. Errors have the same `path`, `code` and optional `detail` shape as kept targets. Read `keep`, `warnings` and `errors` even when execution completed. Internal commands `execute <id>`, `notices` and `acknowledge <id>` serve the executor and the Tern result action. They do not grant consent.
+
+Preserve the main checkout, non-managed worktrees, paths identified to stay, blocked lanes, work to lose, live activity and uncertain targets. A closed issue or a closed PR without a merge is not sufficient. Before teardown, the executor examines path, registration, lock, branch, HEAD, merge proof and activity again. Changes can shrink the selection. Follow the teardown policy for local branches and keep remote branches. Unlike `clean`, this path does not discard changes, create recovery archives or prune Docker resources.
+
+#### Finish causes
+
+Each `keep` or `errors` entry has the form `{"path": "/canonical/worktree", "code": "path_identity_changed"}`, with an optional `detail` string. `code` is the stable public value for automation. `detail` carries an external exception message when available, for inspection rather than matching. Internal decisions carry no explanatory prose in `detail`. These entries have no `reason` field.
+
+| Code                    | Cause                                                                   |
+| ----------------------- | ----------------------------------------------------------------------- |
+| `path_identity_changed` | A path no longer has its approved identity or canonical directory form. |
+| `registration_changed`  | The worktree registration, branch or HEAD no longer matches approval.   |
+| `inspection_failed`     | A required inspection failed without a more specific CLI error code.    |
+| `caller_waiting`        | The executor cannot prove that the caller has exited at this time.      |
+| `interrupted`           | An earlier teardown stopped and is not replayed.                        |
+| `worker_start_failed`   | The external teardown worker could not start.                           |
+| `teardown_failed`       | Teardown failed without a more specific CLI error code.                 |
+| `not_managed`           | The target is not an eligible managed worktree.                         |
+| `retained`              | The coordinator did not include the target in teardown.                 |
+| `not_merged`            | The required merged pull request proof is unavailable.                  |
+| `active_process`        | Live activity prevents teardown.                                        |
+
+Finish also preserves the [CLI error codes](#error-codes), for example `dirty_worktree`, `busy_tabs`, `git_failed` and `tern_failed`. It does not replace them with a generic cause. This does not change the CLI error envelope or `clean`'s `reason` fields.
+
+Saved finish state uses version `2`. The CLI rejects version `1` and other state that is not compatible. It does not convert that state or authorize teardown from it. Create a new plan and get consent to its preview.
+
 ### `clean`
 
 `tern-wt clean --repo <dir> [--apply]`
@@ -220,7 +273,7 @@ Output: the options file with each default filled in, `{"teardown", "cloneRoot",
 
 `tern-wt setup`
 
-Links `~/.local/bin/tern-wt` to the CLI and `~/.agents/skills/tern-worktrees` to this skill, the two in the package that it runs from. The plugin runs it each time it loads in a Tern window. A second run changes nothing. Output: `{"links": [{"path", "target", "action"}]}`, with `action` `created`, `kept`, `replaced` or `removed`. Removes the previous `~/.omp/agent/skills/tern-worktrees` symbolic link only when its target is the bundled skill of a package named `tern-worktrees`. Reports its previous target with action `removed`. Real folders and unrelated links stay unchanged. A file or a folder that is not a symbolic link at a new link path gives `path_conflict`, and `setup` then changes nothing.
+Links `~/.local/bin/tern-wt` to the CLI and `~/.agents/skills/tern-worktrees` to this skill. It links each applicable omp agent directory's `extensions/tern-worktrees-omp` to the bundled `omp` package. Setup covers the default agent, active agent and real profiles on disk, using omp configuration paths. Restart a running omp session to load the extension. The plugin runs setup each time it loads in a Tern window. A second run changes nothing. Output: `{"links": [{"path", "target", "action"}]}`, with `action` `created`, `kept`, `replaced` or `removed`. It removes the previous `~/.omp/agent/skills/tern-worktrees` symbolic link only when its target is this bundled skill. The target package must have the name `tern-worktrees`. A conflicting real file, folder or unrelated extension link gives `path_conflict` before setup changes links. Preserve unrelated links and real directories.
 
 ## Error codes
 

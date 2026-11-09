@@ -202,7 +202,7 @@ const darwinInspection = async (pid?: number): Promise<{ entries: InspectedProce
   return { entries: rows.map(row => ({ command: row.command, inspection: inspectDarwinRow(row, cwds, sampledAt), pid: row.pid })) };
 };
 
-/** Re-reads a process identity before signalling it. Rejects uncertain macOS inspection rather than reporting a false exit. */
+/** Re-reads a process identity before signalling it. Rejects uncertain inspection rather than reporting a false exit. */
 export const identityOf = async (pid: number): Promise<ProcessIdentity | null> => {
   if (process.platform === 'darwin' && envVar('TERN_WT_PROC_ROOT') === undefined) {
     const { entries, unavailable } = await darwinInspection(pid);
@@ -219,6 +219,9 @@ export const identityOf = async (pid: number): Promise<ProcessIdentity | null> =
     return entry.inspection.identity;
   }
   const inspection = await inspectProcess(pid);
+  if (inspection.incomplete !== undefined) {
+    throw new Error(`Process inspection incomplete: ${pid}; process preserved.`);
+  }
   return inspection.identity;
 };
 
@@ -270,6 +273,12 @@ const reportIncompleteProcesses = (entries: InspectedProcessRow[], ctx: Resource
   }
 };
 
+const otherProcessIdentities = (entries: InspectedProcessRow[], ctx: ResourceContext, plan: ResourcePlan): ProcessIdentity[] => {
+  const others = entries.filter(entry => entry.pid !== process.pid);
+  reportIncompleteProcesses(others, ctx, plan);
+  return entries.flatMap(entry => (entry.inspection.identity === null ? [] : [entry.inspection.identity]));
+};
+
 /** Samples owned processes and records narrowly scoped inspection uncertainty. */
 export const processSnapshot = async (ctx: ResourceContext, plan: ResourcePlan): Promise<ProcessIdentity[]> => {
   const unavailable = (reason: string): ProcessIdentity[] => {
@@ -284,8 +293,7 @@ export const processSnapshot = async (ctx: ResourceContext, plan: ResourcePlan):
     if (reason !== undefined) {
       return unavailable(reason);
     }
-    reportIncompleteProcesses(entries, ctx, plan);
-    return entries.flatMap(entry => (entry.inspection.identity === null ? [] : [entry.inspection.identity]));
+    return otherProcessIdentities(entries, ctx, plan);
   }
   if (process.platform !== 'linux' && envVar('TERN_WT_PROC_ROOT') === undefined) {
     return unavailable('Process inspection unavailable: Linux /proc or macOS lsof required; worktree process ownership cannot be proven.');
@@ -303,6 +311,5 @@ export const processSnapshot = async (ctx: ResourceContext, plan: ResourcePlan):
     return unavailable('Cannot inspect processes; worktree process ownership cannot be proven.');
   }
   const entries = await inspectProcessRows(result.stdout);
-  reportIncompleteProcesses(entries, ctx, plan);
-  return entries.flatMap(entry => (entry.inspection.identity === null ? [] : [entry.inspection.identity]));
+  return otherProcessIdentities(entries, ctx, plan);
 };

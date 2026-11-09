@@ -2018,6 +2018,172 @@ local function intercept(cx: WindowCx, tab: number?): boolean
 	return true
 end
 
+type FinishCauseCode =
+	"bad_args"
+	| "config_invalid"
+	| "worktree_config_invalid"
+	| "service_failed"
+	| "docker_missing"
+	| "setup_failed"
+	| "not_a_repo"
+	| "not_cloned"
+	| "not_managed"
+	| "path_conflict"
+	| "worktree_exists_elsewhere"
+	| "dirty_worktree"
+	| "busy_tabs"
+	| "git_failed"
+	| "gh_failed"
+	| "omp_failed"
+	| "tern_failed"
+	| "path_identity_changed"
+	| "registration_changed"
+	| "inspection_failed"
+	| "caller_waiting"
+	| "interrupted"
+	| "worker_start_failed"
+	| "teardown_failed"
+	| "retained"
+	| "not_merged"
+	| "active_process"
+type FinishCause = { path: string, code: FinishCauseCode, detail: string? }
+
+local FINISH_CAUSE_LABELS: { [FinishCauseCode]: string } = {
+	bad_args = "Invalid teardown arguments",
+	config_invalid = "Invalid configuration",
+	worktree_config_invalid = "Invalid worktree configuration",
+	service_failed = "Service operation failed",
+	docker_missing = "Docker is unavailable",
+	setup_failed = "Worktree setup failed",
+	not_a_repo = "Not a Git repository",
+	not_cloned = "Repository is not cloned",
+	not_managed = "Not a managed worktree",
+	path_conflict = "Worktree path conflicts with another path",
+	worktree_exists_elsewhere = "Worktree exists at another path",
+	dirty_worktree = "Worktree has uncommitted changes",
+	busy_tabs = "Worktree has active tabs",
+	git_failed = "Git operation failed",
+	gh_failed = "GitHub operation failed",
+	omp_failed = "OMP operation failed",
+	tern_failed = "Tern operation failed",
+	path_identity_changed = "Worktree path identity changed since approval",
+	registration_changed = "Git worktree registration changed since approval",
+	inspection_failed = "Worktree inspection failed",
+	caller_waiting = "Calling session exit cannot be proven",
+	interrupted = "Teardown was interrupted",
+	worker_start_failed = "Teardown worker could not start",
+	teardown_failed = "Worktree teardown failed",
+	retained = "Worktree retained by policy",
+	not_merged = "Worktree is not proven merged",
+	active_process = "Worktree has an active process",
+}
+
+local function finish_cause_text(cause: FinishCause): string
+	local label = FINISH_CAUSE_LABELS[cause.code]
+	return basename(cause.path) .. ": " .. label .. (if cause.detail ~= nil then ": " .. cause.detail else "")
+end
+
+type FinishNotice = {
+	id: string,
+	repo: string,
+	removed: { { path: string } },
+	keep: { FinishCause },
+	errors: { FinishCause },
+	warnings: { string },
+}
+type FinishNotices = { pending: { string }, completed: { FinishNotice } }
+
+local finishReading = false
+local finishWaiting = false
+local finishShown: { [string]: boolean } = {}
+
+local function finish_watch(_cx: WindowCx)
+	if finishReading or finishWaiting then
+		return
+	end
+	finishReading = true
+	cli({ "finish", "notices" }, function(res: FinishNotices, err, cx)
+		finishReading = false
+		if err ~= nil then
+			cx:toast("error", "Worktree teardown notices failed: " .. err.message)
+			return
+		end
+		for _, result in ipairs(res.completed) do
+			if not finishShown[result.id] then
+				local detail: { string } = {}
+				for _, failure in ipairs(result.errors) do
+					table.insert(detail, finish_cause_text(failure))
+				end
+				for _, kept in ipairs(result.keep) do
+					table.insert(detail, finish_cause_text(kept))
+				end
+				for _, warning in ipairs(result.warnings) do
+					table.insert(detail, warning)
+				end
+				local truncated = #detail > 10
+				while #detail > 10 do
+					table.remove(detail)
+				end
+				for i, text in ipairs(detail) do
+					if #text > 120 then
+						local last = 117
+						while string.byte(text, last + 1) >= 128 and string.byte(text, last + 1) < 192 do
+							last -= 1
+						end
+						detail[i] = string.sub(text, 1, last) .. "…"
+						truncated = true
+					end
+				end
+				if truncated then
+					table.insert(detail, "Details: tern-wt finish status " .. result.id)
+				end
+				cx:toast(
+					if #result.errors > 0 then "error" elseif #result.keep > 0 then "info" else "success",
+					string.format(
+						"%d worktrees removed, %d kept, %d errors",
+						#result.removed,
+						#result.keep,
+						#result.errors
+					),
+					if #detail > 0 then table.concat(detail, "; ") else nil
+				)
+				finishShown[result.id] = true
+				for _, removed in ipairs(result.removed) do
+					worktree_torn_down(cx, removed.path, result.repo)
+				end
+			end
+			cli({ "finish", "acknowledge", result.id }, function(ack: { acknowledged: boolean }, ackError, ackCx)
+				if ackError ~= nil then
+					ackCx:toast("error", "Worktree teardown acknowledgement failed: " .. ackError.message)
+				elseif not ack.acknowledged then
+					ackCx:toast(
+						"error",
+						"Worktree teardown acknowledgement refused",
+						"tern-wt finish status " .. result.id
+					)
+				end
+			end)
+		end
+		if #res.pending > 0 then
+			finishWaiting = true
+			tern.timer(1000, function(nextCx: WindowCx?)
+				finishWaiting = false
+				if nextCx ~= nil then
+					finish_watch(nextCx)
+				end
+			end)
+		end
+	end)
+end
+
+tern.command({ id = "finish-watch", title = "Show completed worktree teardown", run = finish_watch })
+
+tern.timer(0, function(cx: WindowCx?)
+	if cx ~= nil then
+		finish_watch(cx)
+	end
+end)
+
 tern.command({ id = "new", title = "New worktree tab", icon = "branch", run = start })
 
 tern.timer(0, function()
@@ -2095,7 +2261,7 @@ local function link_cli_and_skill()
 		end
 		for _, link in ipairs(res.links or {}) do
 			if link.action ~= "kept" then
-				cx:toast("info", "Linked tern-wt and the tern-worktrees skill")
+				cx:toast("info", "Linked tern-wt, the tern-worktrees skill and the OMP extension")
 				return
 			end
 		end

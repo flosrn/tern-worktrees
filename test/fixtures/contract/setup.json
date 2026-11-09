@@ -1,6 +1,7 @@
 {
   "links": [
     { "action": "created", "path": "{{binLink}}", "target": "{{binTarget}}" },
-    { "action": "created", "path": "{{skillLink}}", "target": "{{skillTarget}}" }
+    { "action": "created", "path": "{{skillLink}}", "target": "{{skillTarget}}" },
+    { "action": "created", "path": "{{ompLink}}", "target": "{{ompTarget}}" }
   ]
 }

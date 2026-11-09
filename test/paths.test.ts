@@ -2,7 +2,7 @@ import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
-import { envVar, expandHome, userHome, isUnder, ompRootDir, pluginData, slug, worktreeOwner, worktreePath, worktreeRoot } from '../src/paths.ts';
+import { envVar, expandHome, userHome, isUnder, ompAgentDir, ompRootDir, pluginData, slug, worktreeOwner, worktreePath, worktreeRoot } from '../src/paths.ts';
 import type { OmpDirsEnv, WorktreeRoot } from '../src/paths.ts';
 import { ompLog, tempDir, useOmp, useSandbox } from './helpers.ts';
 import type { Sandbox } from './helpers.ts';
@@ -102,6 +102,21 @@ describe('paths', () => {
       vi.stubEnv('TERN_WT_OMP', omp);
       vi.stubEnv('TERN_WT_HOME', '');
       await expect(worktreeRoot()).resolves.toStrictEqual({ dir: '/wt', omp: true });
+    });
+  });
+
+  describe(ompAgentDir, () => {
+    it.each([
+      [{}, '/home/me/.omp/agent'],
+      [{ PI_CONFIG_DIR: '.custom' }, '/home/me/.custom/agent'],
+      [{ PI_CODING_AGENT_DIR: '/custom/agent' }, '/custom/agent'],
+      [{ OMP_PROFILE: 'work', PI_CODING_AGENT_DIR: '/custom/agent' }, '/home/me/.omp/profiles/work/agent'],
+      [{ OMP_PROFILE: '', PI_PROFILE: 'work' }, '/home/me/.omp/agent'],
+      [{ PI_PROFILE: 'work' }, '/home/me/.omp/profiles/work/agent'],
+      [{ OMP_PROFILE: '', PI_CODING_AGENT_DIR: '/home/me/.omp/profiles/work/agent', PI_PROFILE: 'work' }, '/home/me/.omp/agent'],
+      [{ XDG_DATA_HOME: '/data' }, '/home/me/.omp/agent'],
+    ])('resolves native discovery for %j', (env, expected) => {
+      expect(ompAgentDir({ env, exists: () => true, home: '/home/me', platform: 'darwin' })).toBe(expected);
     });
   });
 
