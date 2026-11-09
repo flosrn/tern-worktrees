@@ -13,6 +13,7 @@ import {
   managedPath,
   readLog,
   tempDir,
+  ternLog,
   tmpRepo,
   useGithubOrigin,
   useSandbox,
@@ -74,6 +75,28 @@ describe('finish planning conditions', () => {
     expect(plan.current).toBeNull();
     expect(plan.ready).toBeFalsy();
     expect(plan.candidates.map(candidate => candidate.path)).toStrictEqual([target]);
+  });
+
+  it('keeps an explicitly excluded owned worktree before inspecting its merged delivery', async () => {
+    const { dir, target } = await fixture();
+    const log = await logGitCalls();
+    const plan = await planned('--repo', dir, '--current', target, '--owned', target, '--exclude', target);
+    expect({ candidates: plan.candidates, kept: plan.keep.filter(item => item.path === target), ready: plan.ready }).toStrictEqual({
+      candidates: [],
+      kept: [{ code: 'retained', path: target }],
+      ready: false,
+    });
+    expect({
+      destructiveGitCalls: readLog(log).filter(line => /worktree remove|branch -[dD]|update-ref/u.test(line)),
+      githubCalls: ghLog(),
+      targetExists: existsSync(target),
+      ternCalls: ternLog(),
+    }).toStrictEqual({
+      destructiveGitCalls: [],
+      githubCalls: [],
+      targetExists: true,
+      ternCalls: [],
+    });
   });
 
   it('refuses a current subdirectory or another repository checkout', async () => {
