@@ -277,6 +277,8 @@ Links `~/.local/bin/tern-wt` to the CLI and `~/.agents/skills/tern-worktrees` to
 
 ## Error codes
 
+Main checkouts with an external Git directory are supported. Linked worktrees of that layout and bare repositories give `not_a_repo`.
+
 | Code                        | Added fields                                    | Next step                                                                                                                                                                                                                                                                                                                                                                                                     |
 | --------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bad_args`                  |                                                 | Fix the arguments from the message.                                                                                                                                                                                                                                                                                                                                                                           |

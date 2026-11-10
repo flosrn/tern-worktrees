@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from 'vite-plus/test';
 import { main } from '../src/cli.ts';
 import { must } from '../src/proc.ts';
 import type { WorktreeConfig } from '../src/worktree-config.ts';
-import { tmpRepo, useGithubOrigin, useSandbox } from './helpers.ts';
+import { git, tempDir, tmpRepo, useGithubOrigin, useSandbox } from './helpers.ts';
 
 const configure = (root: string, value: Partial<WorktreeConfig>): void => {
   mkdirSync(path.join(root, '.tern'), { recursive: true });
@@ -87,6 +87,23 @@ describe('prepare and env', () => {
     expect(shell).toMatchObject({ code: 0, stderr: '', stdout: "export EMPTY=''\nexport VALUE='it'\\''s $(echo wrong) $HOME'\n" });
     const expanded = await must(['sh', '-c', `${shell.stdout}printf '%s' "$VALUE"`], 'git_failed');
     expect(expanded).toBe("it's $(echo wrong) $HOME");
+  });
+
+  it('exports repository variables from a checkout with a separate git directory', async () => {
+    const root = tempDir('separate-git');
+    const checkout = path.join(root, 'checkout');
+    await git(root, 'init', '--quiet', '--separate-git-dir', path.join(root, 'metadata'), checkout);
+    configure(checkout, { env: { WHERE: 'separate' } });
+    const result = await main(['env', checkout, '--shell']);
+    expect(result).toStrictEqual({ code: 0, stderr: '', stdout: "export WHERE='separate'\n" });
+  });
+
+  it('rejects a bare repository named .git with not_a_repo', async () => {
+    const root = tempDir('bare');
+    const bare = path.join(root, '.git');
+    await git(root, 'init', '--quiet', '--bare', bare);
+    const result = await main(['env', bare, '--shell']);
+    expect(result).toStrictEqual({ code: 1, stderr: `${bare} is not in a git repository\n`, stdout: `${notRepo(bare)}\n` });
   });
 
   it('reads the target linked worktree configuration rather than the main checkout', async () => {

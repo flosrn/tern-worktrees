@@ -117,7 +117,7 @@ const interruption = async (state: StoredFinish, target: string, effect: 'inspec
   } else {
     const condition =
       effect === 'inspection'
-        ? `"$2" = '${target}' ] && [ "$3 $4 $5 $6" = 'rev-parse --path-format=absolute --git-common-dir --show-toplevel'`
+        ? `"$2" = '${target}' ] && [ "$3 $4 $5 $6 $7 $8" = 'rev-parse --path-format=absolute --git-common-dir --git-dir --is-bare-repository --show-toplevel'`
         : `"$2" = '${state.repo}' ] && [ "$5 $6 $7" = 'worktree remove ${target}'`;
     await gitShim(`if [ ${condition} ] && [ ! -e '${marker}' ]; then ${stop}; fi`);
   }

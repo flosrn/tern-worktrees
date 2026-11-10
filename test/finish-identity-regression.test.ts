@@ -218,7 +218,9 @@ describe('finish revalidates every approved identity independently', () => {
   test('preserves a target whose path resolves elsewhere even with the approved directory identity', async () => {
     const { state, target } = await approval();
     const inspected = path.join(tempDir('finish-canonical-inspection'), 'inspected');
-    await gitShim(`if [ "$2" = '${target}' ] && [ "$3 $4 $5 $6" = 'rev-parse --path-format=absolute --git-common-dir --show-toplevel' ]; then : >'${inspected}'; fi`);
+    await gitShim(
+      `if [ "$2" = '${target}' ] && [ "$3 $4 $5 $6 $7 $8" = 'rev-parse --path-format=absolute --git-common-dir --git-dir --is-bare-repository --show-toplevel' ]; then : >'${inspected}'; fi`,
+    );
     const original = fs.realpathSync;
     let changed = false;
     vi.spyOn(fs, 'realpathSync').mockImplementation((file, options) => {
@@ -265,7 +267,7 @@ describe('finish revalidates every approved identity independently', () => {
       const top = change === 'inside' ? state.repo : target;
       const inspected = path.join(tempDir('finish-checkout'), 'inspected');
       await gitShim(
-        `if [ "$2" = '${target}' ] && [ "$3 $4 $5 $6" = 'rev-parse --path-format=absolute --git-common-dir --show-toplevel' ] && [ ! -e '${inspected}' ]; then : >'${inspected}'; printf '%s\\n' '${main}/.git' '${top}'; exit 0; fi`,
+        `if [ "$2" = '${target}' ] && [ "$3 $4 $5 $6 $7 $8" = 'rev-parse --path-format=absolute --git-common-dir --git-dir --is-bare-repository --show-toplevel' ] && [ ! -e '${inspected}' ]; then : >'${inspected}'; printf '%s\\n' '${main}/.git' '${main}/.git/worktrees/delivered' false '${top}'; exit 0; fi`,
       );
     } else {
       await gitShim(`if [ "$2" = '${state.repo}' ] && [ "$3 $4 $5 $6" = 'worktree list --porcelain -z' ]; then cat '${listing}'; exit 0; fi`);

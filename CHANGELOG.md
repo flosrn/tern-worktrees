@@ -20,6 +20,7 @@
 
 ### Fix
 
+- Recognize main checkouts with an external Git directory so `env --shell` and `heavy` work there. Keep bare repositories and linked worktrees whose main checkout cannot be derived unsupported
 - Keep Stryker as an optional tool with an isolated home and incremental results. Remove mutation testing from pre-commit hooks and CI, along with the exception wrapper, manifest and source directives. Keep the format, lint, type, Luau and 100% coverage checks. Run CI for pull requests and pushes to `main` as well as release and hotfix branches
 
 - Find Bun through the mise shims when Tern starts with a GUI PATH. Previously the window's automatic setup failed with `bun not found` even though Bun worked in terminal login shells.
