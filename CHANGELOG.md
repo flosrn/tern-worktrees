@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.3](https://github.com/riicodespretty/tern-worktrees/releases/tag/0.3.3 "2026-11-10")
+
+### Fix
+
+- Recognize main checkouts with an external Git directory so `env --shell` and `heavy` work there. Keep bare repositories and linked worktrees whose main checkout cannot be derived unsupported
+
 ## Unreleased
 
 ### Feature

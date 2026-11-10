@@ -30,17 +30,27 @@ export const gitSucceeds = async (dir: string, ...args: string[]): Promise<boole
 /** Tells if `commit` is an ancestor of `of` in the repository at `dir`, or the same commit. */
 export const isAncestor = async (dir: string, commit: string, of: string): Promise<boolean> => await gitSucceeds(dir, 'merge-base', '--is-ancestor', commit, of);
 
-const mainCheckoutOf = (commonDir: string): string | null => (commonDir.endsWith('/.git') ? path.dirname(commonDir) : null);
+const mainCheckoutOf = (commonDir: string, gitDir: string, bare: string, topLevel: string | undefined): string | null => {
+  if (bare === 'true') {
+    return null;
+  }
+  if (commonDir.endsWith('/.git')) {
+    return path.dirname(commonDir);
+  }
+  // An external git directory identifies its main checkout only from that checkout, not from a linked worktree.
+  return gitDir === commonDir ? (topLevel ?? null) : null;
+};
 
 const ABSOLUTE_PATH = '--path-format=absolute';
 const MODULES = 'modules';
 const GIT_PATH = '--git-path';
-const commonDirArgs = ['rev-parse', ABSOLUTE_PATH, '--git-common-dir'];
+const commonDirArgs = ['rev-parse', ABSOLUTE_PATH, '--git-common-dir', '--git-dir', '--is-bare-repository', '--show-toplevel'];
 
 /** The main checkout of the repository that holds `dir`, or null when `dir` is not in a repository with a checkout. */
 export const repoRoot = async (dir: string): Promise<string | null> => {
   const result = await gitRun(dir, ...commonDirArgs);
-  return mainCheckoutOf(result.stdout.trim());
+  const [commonDir, gitDir, bare, topLevel] = result.stdout.trimEnd().split('\n');
+  return mainCheckoutOf(commonDir, gitDir, bare, topLevel);
 };
 
 /** Like {@link repoRoot}, but throws `not_a_repo` when `dir` is not in a repository with a checkout. */
@@ -63,9 +73,9 @@ export interface Checkout {
 
 /** The checkout at `dir`, or null when `dir` is not in a repository with a checkout. It compares real paths. */
 export const checkoutAt = async (dir: string): Promise<Checkout | null> => {
-  const result = await gitRun(dir, ...commonDirArgs, '--show-toplevel');
-  const [commonDir, topLevel] = result.stdout.split('\n');
-  const main = mainCheckoutOf(commonDir);
+  const result = await gitRun(dir, ...commonDirArgs);
+  const [commonDir, gitDir, bare, topLevel] = result.stdout.trimEnd().split('\n');
+  const main = mainCheckoutOf(commonDir, gitDir, bare, topLevel);
   if (main === null) {
     return null;
   }

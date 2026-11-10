@@ -280,6 +280,8 @@ tern-wt heavy -- npm run build   # Run with a host-wide heavy slot
 tern-wt heavy --status           # Inspect slots and host memory
 ```
 
+These commands also accept a main checkout with an external Git directory, for example one made with `git init --separate-git-dir`. Linked worktrees of that layout and bare repositories give `not_a_repo`.
+
 `prepare <path>` runs setup sequentially in the checkout root, repository commands first and user commands second. It waits for setup to complete and returns `{"path", "repo", "services": [{"name", "container", "status"}], "setup": [{"command", "exitCode", "ms"}], "env", "warnings"}`. A service status is `started` or `running`. A failed setup command stops the sequence with `setup_failed`, its `command`, `exitCode` and the last 40 lines in `output`. `--no-setup` returns an empty `setup` array. Unlike `create`, `prepare` needs no Tern tab.
 
 `heavy [--repo <dir>] -- <command> [args...]` starts or reuses services and applies the repository environment, then runs the command in the current directory, even with `--repo`. It passes through standard output, standard error and the command's exit code, without a JSON result. Slots are shared across the host: `max(1, floor(total RAM in GiB / heavy.slotMemoryGb))`, with locks at `<plugin-data>/heavy/slot-<n>.lock`. Locks with dead process IDs are removed. When all slots are busy, it writes one waiting message to standard error and retries at 5 s intervals. The lock is released when the command ends or receives a signal. `heavy --status` returns `{"slots": [{"slot", "busy", "pid", "cwd", "command", "startedAt"}], "memAvailableGb", "memTotalGb"}`. Idle slots have null ownership fields. Memory values use GiB.

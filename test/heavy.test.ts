@@ -8,7 +8,7 @@ import { CliOutput } from '../src/cli-output.ts';
 import { run } from '../src/commands/heavy.ts';
 import { acquireHeavySlot, heavyStatus } from '../src/heavy.ts';
 import { CANCEL_SIGNALS, runInherited } from '../src/proc.ts';
-import { tempDir, tmpRepo, useSandbox } from './helpers.ts';
+import { git, REPO_DIR, tempDir, tmpRepo, useSandbox } from './helpers.ts';
 
 const GIB = 1024 ** 3;
 
@@ -226,6 +226,28 @@ describe('heavy command', () => {
     await expect(run(['--repo', repo.dir, '--', process.execPath, '-e', 'process.exit(23)'])).resolves.toStrictEqual(new CliOutput(23));
     expect(process.listenerCount('exit')).toBe(exitListeners);
     expect(heavyStatus().slots.every(slot => !slot.busy)).toBeTruthy();
+  });
+
+  it('runs true and passes child output through in a checkout with a separate git directory', async () => {
+    const root = tempDir('separate-git');
+    const checkout = path.join(root, 'checkout');
+    await git(root, 'init', '--quiet', '--separate-git-dir', path.join(root, 'metadata'), checkout);
+    mkdirSync(path.join(checkout, '.tern'));
+    writeFileSync(path.join(checkout, '.tern', 'worktree.json'), JSON.stringify({ env: { WHERE: 'separate' } }));
+    const cli = path.join(REPO_DIR, 'bin', 'tern-wt');
+    const result = spawnSync(cli, ['heavy', '--', 'true'], { cwd: checkout, encoding: 'utf-8' });
+    expect({ status: result.status, stderr: result.stderr, stdout: result.stdout }).toStrictEqual({ status: 0, stderr: '', stdout: '' });
+    const child = spawnSync(cli, ['heavy', '--', 'sh', '-c', 'printf "%s\\n" "$WHERE"; printf "child-error\\n" >&2'], { cwd: checkout, encoding: 'utf-8' });
+    expect({ status: child.status, stderr: child.stderr, stdout: child.stdout }).toStrictEqual({ status: 0, stderr: 'child-error\n', stdout: 'separate\n' });
+  });
+
+  it('rejects a bare repository with not_a_repo instead of running a heavy child', async () => {
+    const root = tempDir('bare');
+    const bare = path.join(root, 'bare.git');
+    await git(root, 'init', '--quiet', '--bare', bare);
+    const result = spawnSync(path.join(REPO_DIR, 'bin', 'tern-wt'), ['heavy', '--', 'true'], { cwd: bare, encoding: 'utf-8' });
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toStrictEqual({ error: { code: 'not_a_repo', message: `${bare} is not in a git repository` } });
   });
 
   it('runs in the current directory with inherited and configured environment', async () => {
