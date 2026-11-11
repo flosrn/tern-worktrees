@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and specs for this repo live as GitHub issues in `riicodespretty/tern-worktrees`. Use the `gh` CLI for each operation.
+Issues and specs for this repo live as GitHub issues in `flosrn/tern-worktrees`. Use the `gh` CLI for each operation.
 
 ## Conventions
 
@@ -31,7 +31,7 @@ The wayfinder skill uses these. The **map** is one issue. Its **children** are t
 
 - **Map**: issue #1, labelled `wayfinder:map`. Its body has these headings: `Destination`, `Notes`, `Decisions so far`, `Not yet specified`, `Out of scope` and `Resolutions`.
 - **Child ticket**: a sub-issue of the map. Add it with `gh api` on the sub-issues endpoint. It has one label, `wayfinder:<type>`. The type is `research`, `prototype`, `grilling` or `task`. For example, #17 has `wayfinder:task`. After the claim, the driving dev is the assignee.
-- **Blocking**: GitHub native issue dependencies. Add an edge with `gh api --method POST repos/riicodespretty/tern-worktrees/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`. The `<blocker-db-id>` is the numeric database id of the blocker. Get it with `gh api repos/riicodespretty/tern-worktrees/issues/<n> --jq .id`. It is not the `#number` and not the `node_id`. GitHub reports `issue_dependencies_summary.blocked_by`. It counts open blockers only. A ticket is unblocked when all blockers are closed.
+- **Blocking**: GitHub native issue dependencies. Add an edge with `gh api --method POST repos/flosrn/tern-worktrees/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`. The `<blocker-db-id>` is the numeric database id of the blocker. Get it with `gh api repos/flosrn/tern-worktrees/issues/<n> --jq .id`. It is not the `#number` and not the `node_id`. GitHub reports `issue_dependencies_summary.blocked_by`. It counts open blockers only. A ticket is unblocked when all blockers are closed.
 - **Frontier query**: list the open children of the map. Drop each child that has an open blocker or an assignee. The first child in map order wins.
 - **Claim**: `gh issue edit <n> --add-assignee @me`. This is the first write of a session.
 - **Resolve**: post the answer with `gh issue comment <n> --body "<answer>"`. Then run `gh issue close <n>`. Then add a line to `## Decisions so far` in the map body. The line links the ticket and states the answer.

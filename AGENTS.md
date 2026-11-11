@@ -36,7 +36,7 @@ Run `vp check`, `vp run check:luau`, `vp run test:luau`, `vp run lint:prose` and
 
 ### Issue tracker
 
-GitHub issues in `riicodespretty/tern-worktrees`, used through `gh`. See `docs/agents/issue-tracker.md`.
+GitHub issues in `flosrn/tern-worktrees`, used through `gh`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
