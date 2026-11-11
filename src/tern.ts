@@ -15,7 +15,8 @@ export interface TernBlock {
 /** A tab of a Tern session. */
 export interface TernTab {
   id: number;
-  name: string;
+  /** Tern reports an unnamed tab as `null`. */
+  name: string | null;
   blocks: TernBlock[];
 }
 

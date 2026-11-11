@@ -22,6 +22,7 @@
 
 ### Fix
 
+- Accept an unnamed Tern tab (`name: null`) in the listing that delivery finish checks. Before, one unnamed tab anywhere in the window kept all finish targets with `tern_failed`. Other malformed listing fields still keep the target. A tab name must be a string or `null`
 - Recognize main checkouts with an external Git directory so `env --shell` and `heavy` work there. Keep bare repositories and linked worktrees whose main checkout cannot be derived unsupported
 - Keep Stryker as an optional tool with an isolated home and incremental results. Remove mutation testing from pre-commit hooks and CI, along with the exception wrapper, manifest and source directives. Keep the format, lint, type, Luau and 100% coverage checks. Run CI for pull requests and pushes to `main` as well as release and hotfix branches
 

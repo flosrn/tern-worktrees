@@ -242,6 +242,19 @@ describe('delivery finish activity identity through system observations', () => 
       expectPreserved(target, log);
     });
 
+    it.each(['outside the target', 'holding the target'] as const)('accepts an unnamed tab %s while still inspecting its real worktree block', async placement => {
+      const { dir, log, target } = await delivered();
+      const targetTab = { blocks: [{ cwd: target, id: 1, title: 'idle shell' }], id: 1 };
+      const otherTab = { blocks: [{ cwd: '/elsewhere', id: 2, title: 'other shell' }], id: 2, name: null };
+      const tabs = placement === 'holding the target' ? [{ ...targetTab, name: null }] : [{ ...targetTab, name: 'delivered' }, otherTab];
+      writeTernLsRaw(JSON.stringify({ sessions: [{ id: 1, name: 'aoyama', tabs }] }));
+      const plan = await planned('--repo', dir, '--current', target);
+      expect({ candidates: plan.candidates.map(candidate => candidate.path), ready: plan.ready }).toStrictEqual({ candidates: [target], ready: true });
+      expect(plan.keep.map(item => item.path)).not.toContain(target);
+      expect(ternLog()).toStrictEqual(['ls --json', 'process 1 --json']);
+      expectPreserved(target, log);
+    });
+
     it('accepts an empty worktree tab alongside the target block', async () => {
       const { dir, log, target } = await delivered();
       writeTernLsRaw(
@@ -265,7 +278,7 @@ describe('delivery finish activity identity through system observations', () => 
       expectPreserved(target, log);
     });
 
-    it.each(['cwd', 'mixed blocks', 'mixed titles', 'mixed tabs', 'session id', 'session name', 'session object', 'listing object', 'sessions array'] as const)(
+    it.each(['cwd', 'mixed blocks', 'mixed titles', 'mixed tabs', 'missing tab name', 'session id', 'session name', 'session object', 'listing object', 'sessions array'] as const)(
       'keeps a target when the Tern listing has an invalid %s alongside usable data',
       async invalid => {
         const { dir, log, target } = await delivered();
@@ -275,6 +288,7 @@ describe('delivery finish activity identity through system observations', () => 
         const listings = {
           'cwd': { sessions: [{ ...session, tabs: [{ ...tab, blocks: [{ ...block, cwd: 5 }] }] }] },
           'listing object': [],
+          'missing tab name': { sessions: [{ ...session, tabs: [tab, { blocks: [], id: 2 }] }] },
           'mixed blocks': { sessions: [{ ...session, tabs: [{ ...tab, blocks: [block, { ...block, cwd: false, id: 2 }] }] }] },
           'mixed tabs': { sessions: [{ ...session, tabs: [tab, { blocks: [], id: 'two', name: 'untrusted' }] }] },
           'mixed titles': { sessions: [{ ...session, tabs: [{ ...tab, blocks: [block, { ...block, id: 2, title: null }] }] }] },
