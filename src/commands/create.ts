@@ -1,10 +1,11 @@
-import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, symlinkSync } from 'node:fs';
+import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { directoryArgs } from '../directory-args.ts';
 import { chooseIssueBranch, readIssue, recordIssue, resolveIssue } from '../create-issue.ts';
 import type { CreatedIssue, IssueData, IssueInput, SuggestedIssue } from '../create-issue.ts';
 import { prepareSetup, setupLine } from '../create-setup.ts';
+import { callerSession, requestEnter } from '../enter.ts';
 import { assignWorktreePort, fetchOrigin, gitMust, gitRun, gitSucceeds, requireRepoRoot, updateSubmodules, worktrees } from '../git.ts';
 import type { Worktree } from '../git.ts';
 import { defaultBranch, ghMust, ghMustWith, readOrigin } from '../github.ts';
@@ -29,6 +30,7 @@ type Owner = Exclude<WorktreeOwner, null> | 'main';
  * The output of `create`. `carried` lists the ignored files that a relocation copied into the rebuilt worktree, and is empty otherwise.
  * `owner` is `tern` for a tern-managed worktree, `omp` for an omp-owned one and `main` for the main checkout.
  * `setup` holds the environment activation and setup commands of a new worktree as one `line`. `typed` is true when `create` typed the line into the tab that it opened. `setup` is null for a reused or relocated worktree, and for a repository without environment variables or setup commands.
+ * `enter` is true with `--enter`, when the calling omp session moves into the worktree at the end of its turn.
  */
 export interface CreateResult {
   branch: string;
@@ -42,10 +44,12 @@ export interface CreateResult {
   tab: WorktreeTab | null;
   warnings: string[];
   issue?: CreatedIssue;
+  enter?: true;
 }
 
 interface Options {
   'branch'?: string;
+  'enter': boolean;
   'new': boolean;
   'no-tab': boolean;
   'pr'?: string;
@@ -117,6 +121,7 @@ const parse = (args: string[]): Options =>
     args,
     options: {
       'branch': { type: 'string' },
+      'enter': { default: false, type: 'boolean' },
       'issue': { type: 'string' },
       'new': { default: false, type: 'boolean' },
       'no-tab': { default: false, type: 'boolean' },
@@ -480,11 +485,12 @@ const prepareCreate = async (options: Options): Promise<PreparedCreate | Suggest
 };
 
 /**
- * `create --repo <dir> (--branch <name> [--new] | --pr <number>) [--relocate] [--no-tab]`,
- * or `create --issue <url|#n|n> [--repo <dir>] [--branch <name>] [--suggest] [--relocate] [--no-tab]`:
+ * `create --repo <dir> (--branch <name> [--new] | --pr <number>) [--relocate] [--no-tab] [--enter]`,
+ * or `create --issue <url|#n|n> [--repo <dir>] [--branch <name>] [--suggest] [--relocate] [--no-tab] [--enter]`:
  * creates or reuses the tern-managed worktree of a branch, issue or pull request, and opens or focuses its Tern tab.
  * An omp-owned worktree of the branch opens where it is, and so do the omp checkout of a same-repository pull request, on branch `pr-<n>`, and the main checkout.
  * omp clone mode, the omp setting `worktree.clone` in the repository, makes new worktrees through omp.
+ * `--enter` records the worktree as the one that the calling omp session moves into at the end of its turn, as `enter` does.
  */
 export const run = async (args: string[]): Promise<CreateResult | SuggestedIssue> => {
   const options = parse(args);
@@ -492,6 +498,7 @@ export const run = async (args: string[]): Promise<CreateResult | SuggestedIssue
   if ('branch' in prepared) {
     return prepared;
   }
+  const session = options.enter ? callerSession() : null;
   const { checked, issue, warnings: issueWarnings } = prepared;
   const { repo, source } = checked;
   const root = await requireRepoRoot(repo);
@@ -521,6 +528,14 @@ export const run = async (args: string[]): Promise<CreateResult | SuggestedIssue
   };
   if (issue !== null) {
     result.issue = issue.data.issue;
+  }
+  if (session !== null) {
+    if (placed.owner === 'main') {
+      ctx.warnings.push('enter skipped: the branch is checked out in the main checkout');
+    } else {
+      requestEnter(session, realpathSync(placed.path));
+      result.enter = true;
+    }
   }
   return result;
 };

@@ -1,23 +1,13 @@
-import { realpathSync } from 'node:fs';
-import path from 'node:path';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { enterRequestFile } from './enter.ts';
 
-interface EnterSchema {
-  optional: () => EnterSchema;
-}
-
-export interface EnterToolResult {
-  content: { type: 'text'; text: string }[];
-  details: { path?: string };
-  isError?: boolean;
-}
-
-/** The part of the omp extension context that `worktree_enter` reads. */
+/** The part of the omp extension context that the enter lifecycle reads. */
 export interface EnterContext {
   cwd: string;
   agent?: { kind: string };
   ui?: { notify: (message: string, type: 'info' | 'warning' | 'error') => void };
-  sessionManager: { getSessionFile: () => string | undefined };
+  sessionManager: { getSessionFile: () => string | undefined; getSessionId: () => string };
   shutdown: () => void;
 }
 
@@ -28,6 +18,7 @@ export interface EnterHookResult {
   additionalContext?: string;
 }
 
+/** The event of a hook. The enter lifecycle reads no field of it. */
 export interface EnterEvent {
   toolName?: string;
 }
@@ -41,103 +32,56 @@ export interface EnterExecResult {
   killed: boolean;
 }
 
-export interface EnterTool {
-  name: string;
-  label: string;
-  description: string;
-  parameters: EnterSchema;
-  loadMode: 'essential';
-  execute: (
-    id: string,
-    params: { path?: string },
-    signal: AbortSignal | undefined,
-    onUpdate: ((result: EnterToolResult) => void) | undefined,
-    ctx: EnterContext,
-  ) => EnterToolResult;
-}
-
-/** Structural subset of the omp 18.18 extension interface that `worktree_enter` uses. No runtime host import. */
+/** Structural subset of the omp 18.18 extension interface that the enter lifecycle uses. No runtime host import. */
 export interface EnterExtensionAPI {
-  zod: { string: () => EnterSchema; object: (properties: Record<string, EnterSchema>) => EnterSchema };
   on: (name: string, handler: EnterHandler) => void;
-  registerTool: (tool: EnterTool) => void;
   exec: (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => Promise<EnterExecResult>;
 }
 
 const cli = fileURLToPath(new URL('../bin/tern-wt', import.meta.url));
 
-const failure = (text: string): EnterToolResult => ({ content: [{ text, type: 'text' }], details: {}, isError: true });
-
-/** A worktree that the session moves into when its turn ends, and the transcript that the fork copies. */
-interface PendingEnter {
-  dir: string;
-  file: string;
-}
+/** Tells if the main session of `ctx` has a worktree to enter, recorded by `tern-wt enter <worktree>` or `tern-wt create --enter`. */
+const requested = (ctx: EnterContext): boolean => (ctx.agent === undefined || ctx.agent.kind === 'main') && existsSync(enterRequestFile(ctx.sessionManager.getSessionId()));
 
 /**
- * Registers `worktree_enter`. The tool records a worktree. At the end of the turn, `tern-wt enter` forks the session into a block adjacent to the tab of that worktree,
- * and this session stops. Until then each other tool call is blocked, so no more work runs in the first directory.
+ * Moves the main session into the worktree that `tern-wt enter` or `tern-wt create --enter` recorded. After the tool call that recorded it, each other tool call
+ * of the turn is blocked. At the end of the turn, `tern-wt enter --session <id> --fork <session file>` forks the session into a block adjacent to the tab of the worktree,
+ * and this session stops. When the fork fails, this session stays and continues the task.
  */
 export default function enterExtension(pi: EnterExtensionAPI): void {
-  let pending: PendingEnter | null = null;
-  pi.registerTool({
-    description:
-      'Move this session into a linked git worktree, for example one that `tern-wt create` just made. At the end of this turn, the session is forked into a Tern block in the tab of the worktree, where it continues the task, and this session ends. Call it last in the turn.',
-    execute(_id, params, _signal, _update, ctx) {
-      if (ctx.agent !== undefined && ctx.agent.kind !== 'main') {
-        return failure('Only the main session can move into a worktree.');
-      }
-      if (process.env.TERN_PANE === undefined || process.env.TERN_PANE === '') {
-        return failure('This session does not run in a Tern pane, so it cannot move into the tab of a worktree.');
-      }
-      const file = ctx.sessionManager.getSessionFile();
-      if (file === undefined || file === '') {
-        return failure('This session has no session file to fork.');
-      }
-      if (params.path === undefined || params.path.trim() === '') {
-        return failure('Expected the path of a worktree.');
-      }
-      let dir: string;
-      try {
-        dir = realpathSync(path.resolve(ctx.cwd, params.path));
-      } catch (error) {
-        return failure(`Cannot resolve the worktree path: ${String(error)}`);
-      }
-      pending = { dir, file };
-      return {
-        content: [
-          {
-            text: `This session moves into ${dir} when this turn ends: a fork of it continues the task there, and this session ends. Make no other tool call. End the turn now with one short line for the user.`,
-            type: 'text',
-          },
-        ],
-        details: { path: dir },
-      };
-    },
-    label: 'Enter worktree',
-    loadMode: 'essential',
-    name: 'worktree_enter',
-    parameters: pi.zod.object({ path: pi.zod.string() }),
+  let pending = false;
+  pi.on('tool_result', (_event, ctx): EnterHookResult | undefined => {
+    if (pending || !requested(ctx)) {
+      return undefined;
+    }
+    pending = true;
+    return {
+      additionalContext:
+        'This session moves into the recorded worktree when this turn ends: a fork of it continues the task there, and this session ends. Make no other tool call. End the turn now with one short line for the user.',
+    };
   });
   pi.on('tool_call', (): EnterHookResult | undefined => {
-    if (pending === null) {
+    if (!pending) {
       return undefined;
     }
-    return { block: true, reason: `This session is moving into ${pending.dir}. End the turn now; the fork continues the task there.` };
+    return { block: true, reason: 'This session is moving into a worktree. End the turn now; the fork continues the task there.' };
   });
   pi.on('session_stop', async (_event, ctx): Promise<EnterHookResult | undefined> => {
-    if (pending === null) {
+    if (!pending && !requested(ctx)) {
       return undefined;
     }
-    const { dir, file } = pending;
-    pending = null;
-    const output = await pi.exec(cli, ['enter', dir, '--fork', file], { cwd: ctx.cwd, timeout: 60_000 });
+    pending = false;
+    const args = ['enter', '--session', ctx.sessionManager.getSessionId(), '--fork', ctx.sessionManager.getSessionFile() ?? ''];
+    const output = await pi.exec(cli, args, { cwd: ctx.cwd, timeout: 60_000 });
     if (output.code === 0 && !output.killed) {
-      ctx.ui?.notify(`Session forked into ${dir}`, 'info');
+      ctx.ui?.notify('Session forked into the worktree', 'info');
       ctx.shutdown();
       return undefined;
     }
     const reason = output.stderr.trim() || `tern-wt enter failed (${output.code})`;
-    return { additionalContext: `The move into ${dir} failed, so this session stays here: ${reason}. Tell the user, then continue the task in this session.`, continue: true };
+    return {
+      additionalContext: `The move into the worktree failed, so this session stays here: ${reason}. Tell the user, then continue the task in this session.`,
+      continue: true,
+    };
   });
 }

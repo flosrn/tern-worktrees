@@ -59,10 +59,6 @@ describe('cli', () => {
       await expect(main(['nope'])).resolves.toStrictEqual({ code: 1, stderr: 'unknown command nope\n', stdout: envelope('bad_args', 'unknown command nope') });
     });
 
-    it('rejects an empty argv as an unknown command', async () => {
-      await expect(main([])).resolves.toStrictEqual({ code: 1, stderr: 'unknown command \n', stdout: envelope('bad_args', 'unknown command ') });
-    });
-
     it('loads create, rejects unknown options and derives an issue branch', async () => {
       const result = await main(['create', '--nope']);
       const { error } = parseEnvelope(result.stdout);
@@ -166,5 +162,39 @@ describe('cli', () => {
       expect(spawnCli(['resolve', '/tmp']).status).toBe(0);
       expect(existsSync(marker)).toBeTruthy();
     });
+  });
+});
+
+describe('cli help', () => {
+  beforeEach(() => {
+    sandbox = useSandbox();
+  });
+
+  it.each([[[]], [['help']], [['--help']], [['-h']]])('prints the overview for %j without reading the options file', async argv => {
+    writeFileSync(path.join(sandbox.pluginData, 'config.json'), '{');
+    const result = await main(argv);
+    expect([result.code, result.stderr]).toStrictEqual([0, '']);
+    expect(result.stdout).toMatch(/^tern-wt: git worktrees as Tern tabs\./u);
+    expect(
+      result.stdout
+        .match(/^ {2}\S+/gmu)
+        ?.map(row => row.trim())
+        .toSorted(),
+    ).toStrictEqual(COMMANDS.toSorted());
+  });
+
+  it.each([[['create', '--help']], [['create', '--repo', '.', '-h']], [['help', 'create']]])('prints the usage of one command for %j', async argv => {
+    const result = await main(argv);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('  tern-wt create --repo <dir> (--branch <name> [--new] | --pr <number>) [--relocate] [--no-tab] [--enter]\n');
+  });
+
+  it('rejects help for an unknown command', async () => {
+    await expect(main(['help', 'nope'])).resolves.toStrictEqual({ code: 1, stderr: 'unknown command nope\n', stdout: envelope('bad_args', 'unknown command nope') });
+    await expect(main(['nope', '--help'])).resolves.toStrictEqual({ code: 1, stderr: 'unknown command nope\n', stdout: envelope('bad_args', 'unknown command nope') });
+  });
+
+  it('passes a --help after -- to the command', async () => {
+    await expect(main(['issue-ref', '--', '--help'])).resolves.toStrictEqual({ code: 0, stderr: '', stdout: `${JSON.stringify({ ref: null })}\n` });
   });
 });

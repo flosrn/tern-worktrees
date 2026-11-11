@@ -22,7 +22,8 @@ description: Use to create, list, relocate or tear down git worktrees as Tern ta
 - For repository cleanup, run `clean --repo <dir>` first and show the user its `remove`, `keep` and `warnings`. Run `clean --repo <dir> --apply` only after the user explicitly says yes to that plan. A request to examine or plan cleanup is not approval to apply it.
 - Treat `clean` as repository-scoped. Keep uncertain resources. Do not supplement it with host-wide Docker, volume or temporary-file pruning.
 - At the real end of a merged delivery, use the [delivery finish](#finish) lifecycle when available. Register the run's paths and blocked lanes. Signal readiness only after all requested deliveries and jobs complete. A worker returns delivery evidence to its coordinator. Only the coordinator asks for teardown.
-- After you make a worktree from a session in the main checkout, call the omp tool `worktree_enter` with its path. Then the user sees your changes in the tab of the worktree. Make it the last tool call of the turn, then end the turn with one short line. A fork of the session continues the task in the worktree, and this session ends. See [`enter`](#enter).
+- From a session in the main checkout, pass `--enter` to `create` when you continue the task in that worktree. Then the user sees your changes in the tab of the worktree. For a worktree that is there, run `tern-wt enter <worktree>`. Make it the last tool call of the turn, then end the turn with one short line. A fork of the session continues the task in the worktree, and this session ends. See [`enter`](#enter).
+- Run `tern-wt --help` for the list of commands, and `tern-wt <command> --help` for the arguments of one command.
 
 ## Output
 
@@ -37,9 +38,9 @@ When omp is on disk but `omp config list --json` fails in `/`, the worktree root
 
 ### `create`
 
-`tern-wt create --repo <dir> (--branch <name> [--new] | --pr <number>) [--relocate] [--no-tab]`
+`tern-wt create --repo <dir> (--branch <name> [--new] | --pr <number>) [--relocate] [--no-tab] [--enter]`
 
-`tern-wt create --issue <url|#n|n> [--repo <dir>] [--branch <name>] [--suggest] [--relocate] [--no-tab]`
+`tern-wt create --issue <url|#n|n> [--repo <dir>] [--branch <name>] [--suggest] [--relocate] [--no-tab] [--enter]`
 
 Makes the tern-managed worktree of a branch, or reuses it. Then opens its tab, or focuses the tab that is open. When the branch has an omp-owned worktree, `create` reuses that worktree where it is, with no `--relocate`. Reuse matches by branch: omp checks out pull request `<n>` on the branch `pr-<n>`. For `--pr <n>` of a pull request from the same repository, when no worktree has its head branch, `create` reuses omp's worktree on `pr-<n>` when the git config key `branch.pr-<n>.ompPrHeadRef` is not set or names the head branch. `branch` in the output is then `pr-<n>`.
 
@@ -61,6 +62,7 @@ A missing local commit skips reuse without a warning. A failed local clone adds 
 - `--suggest`: with an issue URL or short issue reference in `--issue`, return `{"branch", "issue": {"number", "url", "title"}, "repo", "warnings"}` without fetching or writing anything. It creates no branch, worktree or tab and writes no `ternIssue`. A `/pull/<n>` URL opens the PR flow directly. Use it without `--suggest`.
 - `--relocate`: move the worktree of the branch into the worktree root from a path that is not in the root. Pass it only after the user says yes. When git refuses the move, `create` makes the worktree again in the root with plain `git worktree add`. Of the work to lose in the first worktree, only a change, a new file that git does not track or a submodule commit not held by a remote branch or by the main checkout's committed submodule history stops it with `dirty_worktree`. Hard-to-rebuild files (see `remove`) do not stop it: `create` copies them into the new worktree.
 - `--no-tab`: skip the tab and service startup. For a new worktree, still return the same `setup.line` with `setup.typed: false`. The caller runs it in the worktree.
+- `--enter`: move the calling omp session into the worktree at the end of its turn, as [`enter`](#enter) does, and give `"enter": true`. Without an omp session in a Tern pane, it gives `bad_args` before `create` makes anything. For a branch of the main checkout, it records nothing and adds the warning `enter skipped: the branch is checked out in the main checkout`.
 
 Issue branches start from `origin/<default>` and use `<prefix>/<number>-<slug>`. The prefix is `fix` when the issue type is `Bug` or a label matches `issueBranch.fixLabels`, ignoring uppercase and lowercase letters. Otherwise it is `feat`. The title slug drops a leading `[tag]` and issue-number references, applies NFKD and removes accent marks, changes letters to lowercase, drops quotes and apostrophes, replaces other runs of characters that do not match `[a-z0-9]` with `-`, and drops French and English stop words. It keeps the first five words, with a maximum of 40 characters on a word boundary. An empty slug gives `<prefix>/<number>`. An unrelated collision adds `-2`, `-3` and so on. The worktree folder replaces `/` with `-` as before.
 
@@ -70,7 +72,7 @@ For these related branch names only, the CLI first selects a branch with a `tern
 
 For a new worktree, `create` loads `.tern/worktree.json` and starts or reuses its services before opening the tab. It waits a maximum of 30 s for the shell prompt, then types the setup line: environment activation first, repository setup commands second, and user setup commands last, with `&&` between them. These commands run in the tab. `create` does not wait for them to complete. See [Repository environment](#repository-environment). Reused and relocated worktrees get no preparation.
 
-Output: `{"path", "branch", "repo", "owner", "port", "status", "carried", "setup", "tab", "warnings"}`, plus `issue` for an issue.
+Output: `{"path", "branch", "repo", "owner", "port", "status", "carried", "setup", "tab", "warnings"}`, plus `issue` for an issue and `enter: true` when `--enter` recorded the worktree.
 
 - `owner`: `tern` for a tern-managed worktree, `omp` for an omp-owned worktree, as in `list`, and `main` for the main checkout. A reused omp-owned worktree and the omp checkout of a pull request give `omp`.
 - `port`: the numeric worktree base port, or null for the main checkout. It is an even number from 4000 through 5998, saved in `branch.<branch>.ternWtPort`. Reuse and relocation keep a saved value unless a different live branch worktree of the same repository uses it. Without a saved value, start at `4000 + 2 * (SHA256(<main checkout folder name>/<branch>).readUInt32BE(0) % 1000)`. Collisions, also for a saved value, with other live branch worktrees of the same repository increase the port by 2, wrapping from 5998 to 4000. Before assigning a port to a new worktree, `create` reserves and saves the derived ports of the other live worktrees that have no saved value. A new branch does not get their ports through alphabetical order. Use the base port and base + 1 for two development servers. Shared Docker service ports stay as declared.
@@ -184,16 +186,17 @@ Saved finish state uses version `2`. The CLI rejects version `1` and other state
 
 ### `enter`
 
-`tern-wt enter <worktree> --fork <session file>`
+`tern-wt enter <worktree>`
 
-Forks the omp session in `<session file>` into a block adjacent to the tab of the linked worktree. The fork runs `omp --fork <session file>` in the worktree, with a first message that tells it to continue the task there. It also gets the caller's `OMP_PROFILE`, `PI_PROFILE`, `PI_CONFIG_DIR` and `PI_CODING_AGENT_DIR`. When no block shows the worktree, `enter` first opens its tab as `create` does. omp comes from `$TERN_WT_OMP`, else `PATH`.
+Records the linked worktree that the calling omp session moves into at the end of its turn. The session is the one in `$PI_SESSION_ID`, which omp sets for its shell commands. The request is in `<plugin-data>/enter/<session id>.json`. A subsequent request of the same session replaces it. Output: `{"path", "repo", "session"}`, with the real path of the worktree and its main checkout.
 
-Do not run `enter` directly: the `worktree_enter` tool runs it at the end of the turn, then stops the first session. The tool blocks each other tool call after it in that turn. It refuses a subagent, a session that does not run in a Tern pane and a session without a session file. When `enter` fails, the session stays and gets the failure: tell the user, then continue the task in that session.
+After that tool call, the bundled omp extension tells you to end the turn and blocks each other tool call of the turn. At the end of the turn, it runs `tern-wt enter --session <id> --fork <session file>`. That command removes the request and forks the session into a block adjacent to the tab of the worktree. When no block shows the worktree, it first opens its tab as `create` does. The fork runs `omp --fork <session file>` in the worktree, with a first message that tells it to continue the task there. It also gets the caller's `OMP_PROFILE`, `PI_PROFILE`, `PI_CONFIG_DIR` and `PI_CODING_AGENT_DIR`. omp comes from `$TERN_WT_OMP`, else `PATH`. Then the first session stops.
 
 - `<worktree>`: the top folder of a linked worktree. The main checkout and a different folder in a worktree give `bad_args`.
-- `--fork`: the session file to fork. A missing file gives `bad_args`.
+- Without `PI_SESSION_ID` or `TERN_PANE`, `enter` gives `bad_args`.
+- Only the main session moves. The extension ignores the requests of a subagent.
 
-Output: `{"agent", "path", "repo", "tab"}`. `agent` is the block of the fork, `path` the real path of the worktree, `repo` its main checkout, and `tab` the `{"session", "block", "opened"}` of the tab, as in `create`.
+When the fork fails, the session stays and gets the failure: tell the user, then continue the task in that session.
 
 ### `clean`
 
