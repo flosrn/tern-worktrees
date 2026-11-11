@@ -20,6 +20,9 @@ process)
 new)
 	echo '{"block":42}'
 	;;
+split)
+	echo '{"block":43}'
+	;;
 wait)
 	exit "${FAKE_TERN_WAIT_STATUS:-0}"
 	;;

@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { repoRoot } from './git.ts';
 import { isJsonObject, isString } from './json.ts';
 import { envVar, isUnder } from './paths.ts';
@@ -151,6 +152,16 @@ export const newTab = async (session: string, cwd: string): Promise<number> => a
 /** Opens a session named `name` at `cwd` and returns its block id. */
 export const newSession = async (name: string, cwd: string): Promise<number> => await newBlock(['session', name, '--cwd', cwd]);
 
+/**
+ * Opens a block at `cwd` adjacent to `block`, on its right, that runs `command` and returns its id. Tern runs a command of one item as shell text, and quotes each item of a command with two or more items.
+ * Give two or more items, so `command` needs no shell quoting. `--json` goes before `--`: after it, Tern reads it as an item of the command.
+ */
+export const split = async (block: number, cwd: string, command: string[]): Promise<number> => {
+  // SAFETY: `tern split --json` prints the id of the new block in the `block` field.
+  const created = JSON.parse(await must([ternBin(), 'split', String(block), 'right', '--json', '--cwd', cwd, '--', ...command], 'tern_failed')) as CreatedBlock;
+  return created.block;
+};
+
 /** Names the tab that holds `block`. */
 export const rename = async (block: number, name: string): Promise<void> => {
   await tern(['rename', String(block), name]);
@@ -201,4 +212,29 @@ export const sessionForRepo = async (listing: TernListing, root: string): Promis
   const cwds = [...new Set(placed.map(({ block }) => cwdOf(block)))];
   const roots = new Map(await Promise.all(cwds.map(async cwd => [cwd, cwd === null ? null : await repoRoot(cwd)] as const)));
   return placed.find(({ block }) => roots.get(cwdOf(block)) === root)?.session ?? null;
+};
+
+/** The Tern tab that shows a worktree: a block in it, the name of its session, and `opened`, true when the tab is new. */
+export interface WorktreeTab {
+  block: number;
+  opened: boolean;
+  session: string;
+}
+
+/**
+ * Focuses the first block in `dir`, a worktree of the repository with the main checkout `root`. When no block is in `dir`, opens a tab named `name` at `dir`
+ * in the session of that repository, or a session named after the folder of `root` when no session has the repository.
+ */
+export const openWorktreeTab = async (root: string, dir: string, name: string): Promise<WorktreeTab> => {
+  const listing = await ls();
+  const existingBlock = blocksUnder(listing, dir).at(0);
+  if (existingBlock) {
+    await focus(existingBlock.block.id);
+    return { block: existingBlock.block.id, opened: false, session: existingBlock.session.name };
+  }
+  const repoName = path.basename(root);
+  const session = await sessionForRepo(listing, root);
+  const block = session === null ? await newSession(repoName, dir) : await newTab(session.name, dir);
+  await rename(block, name);
+  return { block, opened: true, session: session?.name ?? repoName };
 };

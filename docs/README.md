@@ -15,7 +15,7 @@ The design has four parts:
 - `tern-wt`, a Bun and TypeScript CLI in `src/`, the single implementation. Each git and gh step runs in the CLI.
 - The window half of the plugin, `window.luau`, a thin UI over the CLI. It opens the native pickers and prompts of Tern, turns each answer into a CLI call, and keeps each worktree tab matched to its worktree. It also keeps the worktree rows of the command palette, the worktree index and the worktree segment current. It types the setup commands into a new worktree tab.
 - The host half of the plugin, `host.luau`. It holds only the spawn filter. The filter gives the worktree variables to a new shell in a worktree in the worktree root.
-- The bundled omp extension in `omp/`, loaded through omp's native extension discovery. It registers the delivery finish lifecycle, validates built-in `ask` consent and delegates teardown to the CLI.
+- The bundled omp extension in `omp/`, loaded through omp's native extension discovery. It registers the delivery finish lifecycle, validates built-in `ask` consent and delegates teardown to the CLI. It also registers `worktree_enter`, which moves a session into a worktree tab through `tern-wt enter`.
 
 The omp skill and the Carly exports give agents the same CLI, so the user and the agents get the same behavior.
 
@@ -169,6 +169,16 @@ CI proof keeps `ready` false when workflow filters use unsupported glob syntax: 
 An automatic check that cannot offer consent is consumed for that delivery episode, also after restart. The session can finish its report without the same continuation loop. An explicit `worktree_finish` call with `action: ready` examines readiness again. It does not grant consent.
 
 Report these limits as missing proof. Do not claim that no workflow applies. Keep the worktrees when proof is unavailable.
+
+### Moving a session into a worktree
+
+Tern shows the working directory of each block, and its views of changed files follow it. An agent that starts in the main checkout and makes a worktree keeps the main checkout as its directory, so the changes of the worktree do not show in its tab. omp has `/move <path>`, which changes the directory of the process, and Tern follows a process that changes its directory. But omp runs a slash command only from the composer, and refuses `/move` during a turn. The extension API has no call that moves a session.
+
+Thus `worktree_enter` forks the session. The tool records the worktree and blocks each other tool call of the turn. At `session_stop`, the extension runs `tern-wt enter`, which opens a block adjacent to the tab of the worktree with `omp --fork <session file>` in the worktree. omp creates the fork in the directory where it starts, so the fork belongs to the worktree. It keeps the full conversation and the prompt cache key of its parent, and a first message tells it to continue the task. The extension then calls `ctx.shutdown()`. The fork starts at the end of the turn, not in the tool call, so its copy of the transcript ends with the result of `worktree_enter` and the last message, with no unfinished tool call.
+
+`tern split` runs a command with one item as shell text, and quotes each item of a command with two or more items. The command of the fork starts with `env`, so it always has two or more items and needs no quoting of its own. `--json` goes before `--`, because after it, it is an item of the command. A Tern block does not get the environment of the caller, so `env` passes the omp profile variables. omp comes from `PATH`, as the agent command of Tern does.
+
+omp has `/wt`, which moves a session into a new worktree. That worktree is omp-owned, with no issue branch, base port, setup or tab, and `/wt` also cleans the main checkout. `worktree_enter` works with each linked worktree, the tern-managed ones included.
 
 ### Close interception
 

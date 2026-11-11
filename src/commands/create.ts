@@ -14,7 +14,8 @@ import { isUnder, worktreeOwner, worktreePath, worktreeRoot } from '../paths.ts'
 import type { WorktreeOwner, WorktreeRoot } from '../paths.ts';
 import { CliError } from '../proc.ts';
 import { nameWithOwner } from '../repo-ref.ts';
-import { blocksUnder, focus, ls, newSession, newTab, rename, sessionForRepo, typeInto, waitForPrompt } from '../tern.ts';
+import { openWorktreeTab, typeInto, waitForPrompt } from '../tern.ts';
+import type { WorktreeTab } from '../tern.ts';
 import { guardWorkToLose } from '../work-to-lose.ts';
 
 /** How `create` got the worktree. */
@@ -23,12 +24,6 @@ export type CreateStatus = 'created' | 'relocated' | 'reused';
 const SETUP_PROMPT_SECONDS = 30;
 /** Who owns the worktree that `create` gives: `tern` or `omp` as {@link worktreeOwner} says, or `main` for the main checkout. */
 type Owner = Exclude<WorktreeOwner, null> | 'main';
-/** The Tern tab that shows the worktree. */
-export interface CreatedTab {
-  block: number;
-  opened: boolean;
-  session: string;
-}
 
 /**
  * The output of `create`. `carried` lists the ignored files that a relocation copied into the rebuilt worktree, and is empty otherwise.
@@ -44,7 +39,7 @@ export interface CreateResult {
   repo: string;
   setup: { line: string; typed: boolean } | null;
   status: CreateStatus;
-  tab: CreatedTab | null;
+  tab: WorktreeTab | null;
   warnings: string[];
   issue?: CreatedIssue;
 }
@@ -413,22 +408,9 @@ const placeWorktree = async (ctx: Context, target: Target, mayRelocate: boolean)
   return { branch: target.branch, carried, owner: 'tern', path: target.path, status: 'relocated' };
 };
 
-const openTab = async (ctx: Context, placed: Placed): Promise<CreatedTab> => {
-  const listing = await ls();
-  const existingBlock = blocksUnder(listing, placed.path).at(0);
-  if (existingBlock) {
-    await focus(existingBlock.block.id);
-    return { block: existingBlock.block.id, opened: false, session: existingBlock.session.name };
-  }
-  const session = await sessionForRepo(listing, ctx.root);
-  const block = session === null ? await newSession(ctx.repoName, placed.path) : await newTab(session.name, placed.path);
-  await rename(block, placed.branch);
-  return { block, opened: true, session: session?.name ?? ctx.repoName };
-};
-
-const tryOpenTab = async (ctx: Context, placed: Placed): Promise<CreatedTab | null> => {
+const tryOpenTab = async (ctx: Context, placed: Placed): Promise<WorktreeTab | null> => {
   try {
-    return await openTab(ctx, placed);
+    return await openWorktreeTab(ctx.root, placed.path, placed.branch);
   } catch (error) {
     if (error instanceof CliError) {
       ctx.warnings.push(`tab not opened: ${error.message}`);
@@ -442,7 +424,7 @@ const tryOpenTab = async (ctx: Context, placed: Placed): Promise<CreatedTab | nu
  * Types `line` into the tab that `create` opened when its shell shows the prompt. Gives true when it typed the line. Without a tab it adds no warning: the caller types the line.
  * A tab that was open before, no prompt in {@link SETUP_PROMPT_SECONDS} and a Tern failure each add a warning and keep the worktree.
  */
-const typeSetup = async (ctx: Context, line: string, tab: CreatedTab | null): Promise<boolean> => {
+const typeSetup = async (ctx: Context, line: string, tab: WorktreeTab | null): Promise<boolean> => {
   if (tab === null) {
     return false;
   }
