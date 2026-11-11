@@ -196,7 +196,9 @@ export const waitForPrompt = async (block: number, seconds: number): Promise<boo
   return true;
 };
 
-const placedBlocks = (listing: TernListing): PlacedBlock[] => listing.sessions.flatMap(session => session.tabs.flatMap(tab => tab.blocks.map(block => ({ block, session, tab }))));
+/** All blocks of `listing`, with the session and tab that hold each one. */
+export const placedBlocks = (listing: TernListing): PlacedBlock[] =>
+  listing.sessions.flatMap(session => session.tabs.flatMap(tab => tab.blocks.map(block => ({ block, session, tab }))));
 
 const cwdOf = (block: TernBlock): string | null => (block.cwd === '' ? null : block.cwd);
 

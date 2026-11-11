@@ -5,8 +5,8 @@ import { isJsonObject, isString } from './json.ts';
 import { isUnder } from './paths.ts';
 import { CliError } from './proc.ts';
 import { isBusyProcess } from './teardown.ts';
-import { blocksUnder, ls, processOf } from './tern.ts';
-import type { PlacedBlock, TernProcessSnapshot } from './tern.ts';
+import { blocksUnder, ls, placedBlocks, processOf } from './tern.ts';
+import type { PlacedBlock, TernListing, TernProcessSnapshot } from './tern.ts';
 import type { StoredFinish } from './finish-store.ts';
 
 export type FinishActivity = { blocks: PlacedBlock[] } & ({ code: 'active_process' | null; reason: null } | { code: 'inspection_failed'; reason: string });
@@ -41,12 +41,12 @@ const validSession = (session: PlacedBlock['session']): boolean => {
 };
 
 /** A malformed Tern listing cannot prove that worktree tabs are not active. */
-const checkedBlocks = async (target: string): Promise<PlacedBlock[]> => {
+const checkedListing = async (): Promise<TernListing> => {
   const listing = await ls();
   if (!isJsonObject(listing) || !Array.isArray(listing.sessions) || !listing.sessions.every(validSession)) {
     throw new CliError('tern_failed', 'Cannot inspect Tern sessions: invalid listing');
   }
-  return blocksUnder(listing, target);
+  return listing;
 };
 
 /** Exempts the caller terminal's idle shell and holds its busy command against the ancestry exemption. */
@@ -90,10 +90,14 @@ const descendsFrom = (entry: ProcessIdentity, caller: ProcessIdentity, byPid: Ma
 
 /** Reads process resources without sending a signal. */
 export const finishActivity = async (state: StoredFinish, target: string, prospective: boolean): Promise<FinishActivity> => {
-  const blocks = await checkedBlocks(target);
+  const listing = await checkedListing();
+  const blocks = blocksUnder(listing, target);
+  const caller = prospective && target === state.current ? state.caller.identity : null;
+  // Sample the caller's terminal wherever its block is. Then its busy command does not pass as a background descendant.
+  const inspected = placedBlocks(listing).filter(({ block }) => blocks.some(entry => entry.block === block) || (caller !== null && block.id === state.caller.block));
   const idle = new Set<number>();
   const held = new Set<number>();
-  const busy = await inspectBlocks(state, target, prospective, blocks, idle, held);
+  const busy = await inspectBlocks(state, target, prospective, inspected, idle, held);
   if (busy) {
     return { blocks, code: 'active_process', reason: null };
   }
@@ -103,7 +107,6 @@ export const finishActivity = async (state: StoredFinish, target: string, prospe
   if (resources.protectedWorktrees.includes(target)) {
     return { blocks, code: 'inspection_failed', reason: resources.warnings.join(' ') };
   }
-  const caller = prospective && target === state.current ? state.caller.identity : null;
   const byPid = new Map(processes.map(entry => [entry.pid, entry]));
   const active = processes.find(entry => {
     if (!isUnder(entry.cwd, target) || entry.pid === process.pid || idle.has(entry.pid)) {

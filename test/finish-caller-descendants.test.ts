@@ -18,7 +18,7 @@ import {
   writeProcess,
   writeTerminal,
 } from './finish-activity-fixture.ts';
-import { useSandbox, writeTernLs } from './helpers.ts';
+import { useSandbox, writeTernListing, writeTernLs } from './helpers.ts';
 
 const descendant = (pid: number, parent: number, cwd: string, command: string): ProcessIdentity => ({ ...identity(pid, cwd, command), parent });
 const observe = (processes: ProcessIdentity[], before = ''): void => {
@@ -102,6 +102,36 @@ describe('background descendants of the pinned caller', () => {
     expectPreserved(target, log);
   });
 
+  it.each([
+    { foreground: 'the caller', place: 'outside the target' },
+    { foreground: 'the caller', place: 'without a directory' },
+    { foreground: 'the command', place: 'outside the target' },
+  ] as const)('keeps the current worktree for a busy terminal command when the caller block is $place and the foreground is $foreground', async ({ foreground, place }) => {
+    const { dir, log, target } = await delivered();
+    const caller = identity(90_001, target);
+    const command = descendant(90_002, caller.pid, target, 'node agent.js');
+    observe([caller, command]);
+    writeTernListing({
+      sessions: [{ id: 1, name: 'aoyama', tabs: [{ blocks: [{ cwd: place === 'outside the target' ? dir : null, id: 1, title: 'omp' }], id: 1, name: 'tab' }] }],
+    });
+    const shell = terminalProcess(identity(90_000, dir, 'zsh -l'), 'zsh');
+    writeTerminal(1, foreground === 'the caller' ? terminalProcess(command, 'node') : shell, terminalProcess(foreground === 'the caller' ? caller : command));
+    const plan = await planCurrent(dir, target, caller);
+    expect(outcome(plan, target)).toStrictEqual({ candidates: [], code: 'active_process', ready: false });
+    expectPreserved(target, log);
+  });
+
+  it('plans the current worktree for a background child when the caller block is outside the target and has no command', async () => {
+    const { dir, log, target } = await delivered();
+    const caller = identity(90_001, target);
+    observe([caller, descendant(90_002, caller.pid, target, 'omp __omp_worker_daemon_broker')]);
+    writeTernLs({ aoyama: [dir] });
+    writeTerminal(1, null, terminalProcess(caller));
+    const plan = await planCurrent(dir, target, caller);
+    expect(outcome(plan, target)).toStrictEqual({ candidates: [target], code: null, ready: true });
+    expectPreserved(target, log);
+  });
+
   it('keeps an owned target that is not the current worktree when a caller descendant holds it', async () => {
     const { dir, log, target } = await delivered();
     const current = await addDelivered(dir, 'current', 8);
@@ -109,6 +139,18 @@ describe('background descendants of the pinned caller', () => {
     observe([caller, descendant(90_002, caller.pid, target, 'omp __omp_worker_daemon_broker')]);
     const plan = await planned('--repo', dir, '--current', current, '--owned', target, '--pid', String(caller.pid));
     expect(outcome(plan, target)).toStrictEqual({ candidates: [current], code: 'active_process', ready: true });
+    expectPreserved(target, log);
+  });
+
+  it('plans an owned target that is not the current worktree while the caller terminal runs the caller', async () => {
+    const { dir, log, target } = await delivered();
+    const current = await addDelivered(dir, 'current', 8);
+    const caller = identity(90_001, current);
+    observe([caller]);
+    writeTernLs({ aoyama: [current] });
+    writeTerminal(1, null, terminalProcess(caller));
+    const plan = await planned('--repo', dir, '--current', current, '--owned', target, '--pid', String(caller.pid), '--block', '1');
+    expect({ candidates: plan.candidates.map(candidate => candidate.path).toSorted(), ready: plan.ready }).toStrictEqual({ candidates: [current, target].toSorted(), ready: true });
     expectPreserved(target, log);
   });
 
