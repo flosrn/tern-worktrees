@@ -288,7 +288,7 @@ These commands also accept a main checkout with an external Git directory, for e
 
 ## The `tern-wt` CLI and the agent skill
 
-[`skills/tern-worktrees/SKILL.md`](skills/tern-worktrees/SKILL.md) is the reference for each command: its arguments, its output fields, the next step for each error code, and the rules agents follow for teardown. The commands:
+[`skills/tern-worktrees/SKILL.md`](skills/tern-worktrees/SKILL.md) is the reference for each command: its arguments, its output fields, the next step for each error code, and the rules agents follow for teardown. `tern-wt --help` lists the commands, and `tern-wt <command> --help` or `tern-wt help <command>` prints the arguments of one command, as text. The commands:
 
 - `create`: makes or reuses the tern-managed worktree of a branch, an issue or a pull request, or reuses its omp-owned worktree or the main checkout, and opens its tab. Its `owner` field is `tern`, `omp` or `main`. Its `port` is the worktree base port, or null for the main checkout. For a new worktree, it starts or reuses services before opening the tab and types `setup.line`, which activates the environment and runs repository setup before user setup. `--no-tab` skips services and the tab but returns the line with `setup.typed: false`.
 - `prepare`: starts or reuses services and runs setup commands in the checkout root, without a Tern tab. `--no-setup` starts or reuses only services.
@@ -296,7 +296,7 @@ These commands also accept a main checkout with an external Git directory, for e
 - `heavy`: runs a command with the repository environment and services in a host-wide slot, or reports slots and memory with `--status`.
 - `remove`: tears down a tern-managed worktree as the teardown policy says, and closes its tabs. Before removal it checks the target blocks for running processes. See the refusal and overrides below.
 - `finish`: saves a delivery teardown plan, records an explicit selection and reports its result. The omp integration asks through the built-in `ask` tool before arming it. See [Finish a delivery](#finish-a-delivery).
-- `enter <worktree> --fork <session file>`: forks an omp session into a block adjacent to the tab of a linked worktree, where it continues the task. The omp tool `worktree_enter` runs it. See [Move an agent session into a worktree](#move-an-agent-session-into-a-worktree).
+- `enter <worktree>`: moves the calling omp session into a linked worktree at the end of its turn. `create --enter` does the same for the worktree that it makes or reuses. See [Move an agent session into a worktree](#move-an-agent-session-into-a-worktree).
 - `clean --repo <dir> [--apply]`: plans repository-scoped removals without writing. Applies a new plan only with `--apply`. See [Plan repository cleanup](#plan-repository-cleanup) for approval, output and safety rules.
 - `list`: lists the tern-managed worktrees, each with its `owner`, base `port` (null for a detached `HEAD`) and number of `changed` files. `--all` adds the omp-owned worktrees. When git cannot count the changes of a worktree, for example because a submodule has a broken `.git` file, `list` still shows that worktree and adds a warning.
 - `branches`: lists the branches, the open pull requests and the worktrees of a repository, with the owner of each worktree and `main` true for the main checkout. `--offline` reads only local refs, with no fetch and no pull requests.
@@ -324,11 +324,18 @@ The Carly `remove(path, force?, closeBusyTabs?)` export uses the process check b
 
 ### Move an agent session into a worktree
 
-An agent that starts in the main checkout can move its session into the worktree that it made. Tern then shows the changes of the worktree in the tab of the agent. The agent calls the omp tool `worktree_enter` with the worktree path, then ends its turn. The extension blocks each other tool call of that turn, so no more work runs in the main checkout.
+An agent that starts in the main checkout can move its session into a worktree. Tern then shows the changes of the worktree in the tab of the agent. The agent selects it with a CLI flag, for each worktree:
 
-At the end of the turn, the extension runs `tern-wt enter <worktree> --fork <session file>`. The command opens the tab of the worktree when no block shows it, and opens a block adjacent to it that runs `omp --fork <session file>` in the worktree. The fork copies the full conversation and gets a first message that tells it to continue the task in the worktree. It gets the omp profile variables of the caller: `OMP_PROFILE`, `PI_PROFILE`, `PI_CONFIG_DIR` and `PI_CODING_AGENT_DIR`. After the fork starts, the first session stops. Its history stays in the session list of the main checkout.
+```sh
+tern-wt create --repo . --branch feat/x --new --enter   # make or reuse the worktree, then move into it
+tern-wt enter ~/.omp/wt/repo/feat-x                     # move into a linked worktree that is there
+```
 
-The tool refuses a subagent, a session that does not run in a Tern pane and a session without a session file. The command refuses a path that is not the top folder of a linked worktree with `bad_args`, and fails with `omp_failed` when omp is not on `PATH`. When the fork does not start, the session stays where it is and continues the task.
+The command records the worktree for the omp session in `$PI_SESSION_ID`, in `<plugin-data>/enter/<session id>.json`, and `create` gives `"enter": true`. After that tool call, the bundled omp extension tells the agent to end its turn and blocks each other tool call of the turn, so no more work runs in the main checkout.
+
+At the end of the turn, the extension runs `tern-wt enter --session <id> --fork <session file>`. The command opens the tab of the worktree when no block shows it, and opens a block adjacent to it that runs `omp --fork <session file>` in the worktree. The fork copies the full conversation and gets a first message that tells it to continue the task in the worktree. It gets the omp profile variables of the caller: `OMP_PROFILE`, `PI_PROFILE`, `PI_CONFIG_DIR` and `PI_CODING_AGENT_DIR`. After the fork starts, the first session stops. Its history stays in the session list of the main checkout.
+
+`enter` and `create --enter` need an omp session in a Tern pane: without `PI_SESSION_ID` or `TERN_PANE`, they give `bad_args`, and `create` makes no worktree. `enter` refuses a path that is not the top folder of a linked worktree with `bad_args`. `create --enter` on a branch of the main checkout adds a warning and records nothing. Only the main session moves: the extension ignores the requests of a subagent. When the fork does not start, the session stays where it is and continues the task.
 
 ### Finish a delivery
 
