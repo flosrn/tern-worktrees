@@ -1051,7 +1051,7 @@ local function type_setup(
 			cx2:run(pane, line .. "\r")
 			done(true, nil)
 		elseif tern.now() >= deadline then
-			give_up(cx2, "setup not run: no shell prompt in " .. SETUP_PROMPT_MS // 1000 .. " s")
+			give_up(cx2, "setup not run: the shell was not ready in " .. SETUP_PROMPT_MS // 1000 .. " s")
 		else
 			tern.timer(SETUP_POLL_MS, poll)
 		end

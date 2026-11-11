@@ -22,6 +22,7 @@
 
 ### Fix
 
+- Type the setup line of a new worktree tab that `create` opens once its shell writes nothing for 1 s, with `tern wait --until idle=1000`. Before, `create` waited for `--until prompt`, which did not stop with Tern's native prompt and a prompt theme, for example `starship`. Thus each `create` waited 30 s and reported `setup not run: no shell prompt in 30 s`. The CLI and the plugin report `setup not run: the shell was not ready in 30 s`
 - Accept an unnamed Tern tab (`name: null`) in the listing that delivery finish checks. Before, one unnamed tab anywhere in the window kept all finish targets with `tern_failed`. Other malformed listing fields still keep the target. A tab name must be a string or `null`
 - Recognize main checkouts with an external Git directory so `env --shell` and `heavy` work there. Keep bare repositories and linked worktrees whose main checkout cannot be derived unsupported
 - Keep Stryker as an optional tool with an isolated home and incremental results. Remove mutation testing from pre-commit hooks and CI, along with the exception wrapper, manifest and source directives. Keep the format, lint, type, Luau and 100% coverage checks. Run CI for pull requests and pushes to `main` as well as release and hotfix branches

@@ -6,7 +6,7 @@ import { managedPath, tempDir, ternLog, tmpRepo, useSandbox, writeTernLs, writeT
 import type { RepoFixture } from './helpers.ts';
 
 const ACTIVATE = 'eval "$(tern-wt env . --shell)"';
-const WAIT = 'wait 42 --until prompt --timeout 30';
+const WAIT = 'wait 42 --until idle=1000 --timeout 30';
 let repo: RepoFixture;
 
 describe('create command tabs', () => {
