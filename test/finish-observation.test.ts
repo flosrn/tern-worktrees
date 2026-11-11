@@ -134,7 +134,7 @@ describe('delivery finish observations', () => {
       { block: { title: null }, label: 'block title', tab: {} },
       { block: {}, label: 'tab object', tab: null },
       { block: {}, label: 'tab ID', tab: { id: 'one' } },
-      { block: {}, label: 'tab name', tab: { name: null } },
+      { block: {}, label: 'tab name', tab: { name: 1 } },
     ])('keeps a worktree when its $label is malformed', async ({ block, tab }) => {
       const { dir, log, target } = await delivered();
       const listedBlock = block === null ? null : { cwd: target, id: 1, title: 'sh', ...block };

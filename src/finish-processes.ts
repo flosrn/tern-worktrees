@@ -27,7 +27,7 @@ const validBlock = (block: PlacedBlock['block']): boolean => {
 };
 
 const validTab = (tab: PlacedBlock['tab']): boolean => {
-  if (!isJsonObject(tab) || !Number.isSafeInteger(tab.id) || !isString(tab.name)) {
+  if (!isJsonObject(tab) || !Number.isSafeInteger(tab.id) || !(tab.name === null || isString(tab.name))) {
     return false;
   }
   return Array.isArray(tab.blocks) && tab.blocks.every(validBlock);
