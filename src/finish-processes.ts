@@ -5,8 +5,8 @@ import { isJsonObject, isString } from './json.ts';
 import { isUnder } from './paths.ts';
 import { CliError } from './proc.ts';
 import { isBusyProcess } from './teardown.ts';
-import { blocksUnder, ls, processOf } from './tern.ts';
-import type { PlacedBlock } from './tern.ts';
+import { blocksUnder, ls, placedBlocks, processOf } from './tern.ts';
+import type { PlacedBlock, TernListing, TernProcessSnapshot } from './tern.ts';
 import type { StoredFinish } from './finish-store.ts';
 
 export type FinishActivity = { blocks: PlacedBlock[] } & ({ code: 'active_process' | null; reason: null } | { code: 'inspection_failed'; reason: string });
@@ -41,21 +41,27 @@ const validSession = (session: PlacedBlock['session']): boolean => {
 };
 
 /** A malformed Tern listing cannot prove that worktree tabs are not active. */
-const checkedBlocks = async (target: string): Promise<PlacedBlock[]> => {
+const checkedListing = async (): Promise<TernListing> => {
   const listing = await ls();
   if (!isJsonObject(listing) || !Array.isArray(listing.sessions) || !listing.sessions.every(validSession)) {
     throw new CliError('tern_failed', 'Cannot inspect Tern sessions: invalid listing');
   }
-  return blocksUnder(listing, target);
+  return listing;
 };
 
-const inspectBlocks = async (state: StoredFinish, target: string, prospective: boolean, blocks: PlacedBlock[], idle: Set<number>): Promise<boolean> => {
+/** Exempts the caller terminal's idle shell and holds its busy command against the ancestry exemption. */
+const sortCallerChild = (snapshot: TernProcessSnapshot, idle: Set<number>, held: Set<number>): void => {
+  if (snapshot.child !== null) {
+    (isBusyProcess({ ...snapshot, foreground: snapshot.child }) ? held : idle).add(snapshot.child.pid);
+  }
+};
+
+/** Reports a busy worktree terminal. */
+const inspectBlocks = async (state: StoredFinish, target: string, prospective: boolean, blocks: PlacedBlock[], idle: Set<number>, held: Set<number>): Promise<boolean> => {
   const samples = await Promise.all(blocks.map(async entry => ({ ...entry, snapshot: await processOf(entry.block.id) })));
   for (const { block, snapshot } of samples) {
     if (prospective && target === state.current && block.id === state.caller.block && state.caller.identity?.pid === snapshot.foreground?.pid) {
-      if (snapshot.child !== null && !isBusyProcess({ ...snapshot, foreground: snapshot.child })) {
-        idle.add(snapshot.child.pid);
-      }
+      sortCallerChild(snapshot, idle, held);
       continue;
     }
     if (isBusyProcess(snapshot)) {
@@ -68,13 +74,47 @@ const inspectBlocks = async (state: StoredFinish, target: string, prospective: b
   return false;
 };
 
+/** Proves descent link by link in one snapshot. A missing link, a held link or a cycle stops the proof. */
+const descendsFrom = (entry: ProcessIdentity, caller: ProcessIdentity, byPid: Map<number, ProcessIdentity>, held: Set<number>): boolean => {
+  const seen = new Set<number>();
+  let link: ProcessIdentity | undefined = entry;
+  while (link !== undefined && !held.has(link.pid) && !seen.has(link.pid)) {
+    seen.add(link.pid);
+    link = byPid.get(link.parent);
+    if (link !== undefined && sameFinishProcess(link, caller)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+/** Holds the processes of the caller's terminal when its block is not in the target. That block grants no idle exemption, so a reused shell PID still counts. */
+const holdOutsideCallerTerminal = async (listing: TernListing, blocks: PlacedBlock[], block: number, held: Set<number>): Promise<void> => {
+  const outside = placedBlocks(listing).some(({ block: placed }) => placed.id === block && !blocks.some(entry => entry.block === placed));
+  if (!outside) {
+    return;
+  }
+  const { child, foreground } = await processOf(block);
+  for (const entry of [child, foreground]) {
+    if (entry !== null) {
+      held.add(entry.pid);
+    }
+  }
+};
+
 /** Reads process resources without sending a signal. */
 export const finishActivity = async (state: StoredFinish, target: string, prospective: boolean): Promise<FinishActivity> => {
-  const blocks = await checkedBlocks(target);
+  const listing = await checkedListing();
+  const blocks = blocksUnder(listing, target);
+  const caller = prospective && target === state.current ? state.caller.identity : null;
   const idle = new Set<number>();
-  const busy = await inspectBlocks(state, target, prospective, blocks, idle);
+  const held = new Set<number>();
+  const busy = await inspectBlocks(state, target, prospective, blocks, idle, held);
   if (busy) {
     return { blocks, code: 'active_process', reason: null };
+  }
+  if (caller !== null && state.caller.block !== null) {
+    await holdOutsideCallerTerminal(listing, blocks, state.caller.block, held);
   }
   const resources: ResourcePlan = { containers: [], keep: [], paths: [], processes: [], protectedWorktrees: [], warnings: [] };
   const processes = await processSnapshot({ removeWorktrees: [target], repo: state.repo, worktrees: [target] }, resources);
@@ -82,11 +122,12 @@ export const finishActivity = async (state: StoredFinish, target: string, prospe
   if (resources.protectedWorktrees.includes(target)) {
     return { blocks, code: 'inspection_failed', reason: resources.warnings.join(' ') };
   }
+  const byPid = new Map(processes.map(entry => [entry.pid, entry]));
   const active = processes.find(entry => {
     if (!isUnder(entry.cwd, target) || entry.pid === process.pid || idle.has(entry.pid)) {
       return false;
     }
-    return !(prospective && target === state.current && state.caller.identity !== null && sameFinishProcess(entry, state.caller.identity));
+    return caller === null || !(sameFinishProcess(entry, caller) || descendsFrom(entry, caller, byPid, held));
   });
   return { blocks, code: active === undefined ? null : 'active_process', reason: null };
 };

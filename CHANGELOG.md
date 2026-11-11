@@ -22,6 +22,7 @@
 
 ### Fix
 
+- Let delivery finish plan the current worktree of the caller when background descendants of the caller run in it. Examples are the omp subagent broker and the eval kernel. Prove each descendant through its parent links in one process sample, until a process with the pinned caller identity. A missing link, a cycle or a chain to PID 1 still keeps the worktree. A busy foreground command in the terminal of the caller still keeps it. Other selected worktrees and the check at execution do not change: a descendant that runs after the caller exits keeps the worktree with `active_process`. Before, an omp session that used subagents or eval could not plan removal of its own worktree
 - Accept an unnamed Tern tab (`name: null`) in the listing that delivery finish checks. Before, one unnamed tab anywhere in the window kept all finish targets with `tern_failed`. Other malformed listing fields still keep the target. A tab name must be a string or `null`
 - Recognize main checkouts with an external Git directory so `env --shell` and `heavy` work there. Keep bare repositories and linked worktrees whose main checkout cannot be derived unsupported
 - Keep Stryker as an optional tool with an isolated home and incremental results. Remove mutation testing from pre-commit hooks and CI, along with the exception wrapper, manifest and source directives. Keep the format, lint, type, Luau and 100% coverage checks. Run CI for pull requests and pushes to `main` as well as release and hotfix branches
