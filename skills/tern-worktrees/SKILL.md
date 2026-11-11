@@ -22,6 +22,7 @@ description: Use to create, list, relocate or tear down git worktrees as Tern ta
 - For repository cleanup, run `clean --repo <dir>` first and show the user its `remove`, `keep` and `warnings`. Run `clean --repo <dir> --apply` only after the user explicitly says yes to that plan. A request to examine or plan cleanup is not approval to apply it.
 - Treat `clean` as repository-scoped. Keep uncertain resources. Do not supplement it with host-wide Docker, volume or temporary-file pruning.
 - At the real end of a merged delivery, use the [delivery finish](#finish) lifecycle when available. Register the run's paths and blocked lanes. Signal readiness only after all requested deliveries and jobs complete. A worker returns delivery evidence to its coordinator. Only the coordinator asks for teardown.
+- After you make a worktree from a session in the main checkout, call the omp tool `worktree_enter` with its path. Then the user sees your changes in the tab of the worktree. Make it the last tool call of the turn, then end the turn with one short line. A fork of the session continues the task in the worktree, and this session ends. See [`enter`](#enter).
 
 ## Output
 
@@ -181,6 +182,19 @@ Finish also preserves the [CLI error codes](#error-codes), for example `dirty_wo
 
 Saved finish state uses version `2`. The CLI rejects version `1` and other state that is not compatible. It does not convert that state or authorize teardown from it. Create a new plan and get consent to its preview.
 
+### `enter`
+
+`tern-wt enter <worktree> --fork <session file>`
+
+Forks the omp session in `<session file>` into a block adjacent to the tab of the linked worktree. The fork runs `omp --fork <session file>` in the worktree, with a first message that tells it to continue the task there. It also gets the caller's `OMP_PROFILE`, `PI_PROFILE`, `PI_CONFIG_DIR` and `PI_CODING_AGENT_DIR`. When no block shows the worktree, `enter` first opens its tab as `create` does. omp comes from `$TERN_WT_OMP`, else `PATH`.
+
+Do not run `enter` directly: the `worktree_enter` tool runs it at the end of the turn, then stops the first session. The tool blocks each other tool call after it in that turn. It refuses a subagent, a session that does not run in a Tern pane and a session without a session file. When `enter` fails, the session stays and gets the failure: tell the user, then continue the task in that session.
+
+- `<worktree>`: the top folder of a linked worktree. The main checkout and a different folder in a worktree give `bad_args`.
+- `--fork`: the session file to fork. A missing file gives `bad_args`.
+
+Output: `{"agent", "path", "repo", "tab"}`. `agent` is the block of the fork, `path` the real path of the worktree, `repo` its main checkout, and `tab` the `{"session", "block", "opened"}` of the tab, as in `create`.
+
 ### `clean`
 
 `tern-wt clean --repo <dir> [--apply]`
@@ -296,7 +310,7 @@ Main checkouts with an external Git directory are supported. Linked worktrees of
 | `busy_tabs`                 | `blocks`                                        | Show the user each block, tab, session and process (`pid`, `name`, `argv`, `cwd`) from `error.blocks`. Stop the processes and retry, or ask before `--close-busy-tabs`. `--force` does not bypass this refusal.                                                                                                                                                                                               |
 | `git_failed`                |                                                 | Show the user the message. For `remove`, ask before `--force`.                                                                                                                                                                                                                                                                                                                                                |
 | `gh_failed`                 |                                                 | Show the user the message. Check `gh auth status`.                                                                                                                                                                                                                                                                                                                                                            |
-| `omp_failed`                |                                                 | Show the user the message. omp is installed but `omp config list --json` failed, so the worktree root is unknown. Fix omp, then run the command again.                                                                                                                                                                                                                                                        |
+| `omp_failed`                |                                                 | Show the user the message. omp is installed but `omp config list --json` failed, so the worktree root is unknown. Fix omp, then run the command again. For `enter`, omp is not on `PATH`.                                                                                                                                                                                                                     |
 | `tern_failed`               |                                                 | Show the user the message. Check that Tern runs and process inspection works. A failed process inspection stops `remove` before removal, also with `--force`. `--keep-tab` and `--close-busy-tabs` skip that inspection.                                                                                                                                                                                      |
 
 An error from `create` after a rebuilt relocation copied the ignored files adds the field `staging`: the temporary folder that keeps those copies. The message names it. Tell the user, and do not delete that folder.

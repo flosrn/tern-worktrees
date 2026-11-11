@@ -5,7 +5,7 @@ Git worktrees as [Tern](https://docs.stencil.so/tern) tabs, in four parts:
 - The `tern-worktrees` Tern plugin. `cmd+shift+w` (W for worktree) opens the branch picker, and the branch you pick opens as a worktree tab. The command palette also lists the branches and pull requests of the current repository as worktree rows. When you close a worktree tab, a Tern picker offers to keep the worktree or tear it down.
 - The `tern-wt` CLI, the one implementation of each git and GitHub step. The plugin runs it, and agents run it directly.
 - The `tern-worktrees` omp skill, the contract that agents follow.
-- The bundled omp extension, which offers consented delivery finish through the built-in `ask` tool.
+- The bundled omp extension, which offers consented delivery finish through the built-in `ask` tool and moves an agent session into a worktree tab.
 
 Each tern-managed worktree lives in the worktree root, at `<root>/<repo>/<slug>`. The slug is the branch name with each `/` changed to `-`. The worktree root is `$TERN_WT_HOME/worktrees` when you set `TERN_WT_HOME`, else the omp worktree root when omp is installed, else `~/.tern-wt/worktrees`. See [Work with omp](#work-with-omp).
 
@@ -296,6 +296,7 @@ These commands also accept a main checkout with an external Git directory, for e
 - `heavy`: runs a command with the repository environment and services in a host-wide slot, or reports slots and memory with `--status`.
 - `remove`: tears down a tern-managed worktree as the teardown policy says, and closes its tabs. Before removal it checks the target blocks for running processes. See the refusal and overrides below.
 - `finish`: saves a delivery teardown plan, records an explicit selection and reports its result. The omp integration asks through the built-in `ask` tool before arming it. See [Finish a delivery](#finish-a-delivery).
+- `enter <worktree> --fork <session file>`: forks an omp session into a block adjacent to the tab of a linked worktree, where it continues the task. The omp tool `worktree_enter` runs it. See [Move an agent session into a worktree](#move-an-agent-session-into-a-worktree).
 - `clean --repo <dir> [--apply]`: plans repository-scoped removals without writing. Applies a new plan only with `--apply`. See [Plan repository cleanup](#plan-repository-cleanup) for approval, output and safety rules.
 - `list`: lists the tern-managed worktrees, each with its `owner`, base `port` (null for a detached `HEAD`) and number of `changed` files. `--all` adds the omp-owned worktrees. When git cannot count the changes of a worktree, for example because a submodule has a broken `.git` file, `list` still shows that worktree and adds a warning.
 - `branches`: lists the branches, the open pull requests and the worktrees of a repository, with the owner of each worktree and `main` true for the main checkout. `--offline` reads only local refs, with no fetch and no pull requests.
@@ -320,6 +321,14 @@ The Carly `create` export has the signature `(repo: string, branch: string?, new
 By default, `remove` refuses busy blocks with `busy_tabs` before removal. `--close-busy-tabs` skips the process check with approval to close busy blocks, `--force` only discards work to lose, and `--keep-tab` skips all Tern inspection and keeps tabs open. Read the [remove rules](skills/tern-worktrees/SKILL.md#remove) for the idle-process rule, `error.blocks`, inspection failures and the limits of this snapshot check.
 
 The Carly `remove(path, force?, closeBusyTabs?)` export uses the process check by default. Set the third argument, `closeBusyTabs`, to `true` only with approval to close busy blocks. It passes `--close-busy-tabs` and skips process inspection. The second argument, `force`, passes `--force` and only discards work to lose.
+
+### Move an agent session into a worktree
+
+An agent that starts in the main checkout can move its session into the worktree that it made. Tern then shows the changes of the worktree in the tab of the agent. The agent calls the omp tool `worktree_enter` with the worktree path, then ends its turn. The extension blocks each other tool call of that turn, so no more work runs in the main checkout.
+
+At the end of the turn, the extension runs `tern-wt enter <worktree> --fork <session file>`. The command opens the tab of the worktree when no block shows it, and opens a block adjacent to it that runs `omp --fork <session file>` in the worktree. The fork copies the full conversation and gets a first message that tells it to continue the task in the worktree. It gets the omp profile variables of the caller: `OMP_PROFILE`, `PI_PROFILE`, `PI_CONFIG_DIR` and `PI_CODING_AGENT_DIR`. After the fork starts, the first session stops. Its history stays in the session list of the main checkout.
+
+The tool refuses a subagent, a session that does not run in a Tern pane and a session without a session file. The command refuses a path that is not the top folder of a linked worktree with `bad_args`, and fails with `omp_failed` when omp is not on `PATH`. When the fork does not start, the session stays where it is and continues the task.
 
 ### Finish a delivery
 
