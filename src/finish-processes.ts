@@ -88,18 +88,33 @@ const descendsFrom = (entry: ProcessIdentity, caller: ProcessIdentity, byPid: Ma
   return false;
 };
 
+/** Holds the processes of the caller's terminal when its block is not in the target. That block grants no idle exemption, so a reused shell PID still counts. */
+const holdOutsideCallerTerminal = async (listing: TernListing, blocks: PlacedBlock[], block: number, held: Set<number>): Promise<void> => {
+  const outside = placedBlocks(listing).some(({ block: placed }) => placed.id === block && !blocks.some(entry => entry.block === placed));
+  if (!outside) {
+    return;
+  }
+  const { child, foreground } = await processOf(block);
+  for (const entry of [child, foreground]) {
+    if (entry !== null) {
+      held.add(entry.pid);
+    }
+  }
+};
+
 /** Reads process resources without sending a signal. */
 export const finishActivity = async (state: StoredFinish, target: string, prospective: boolean): Promise<FinishActivity> => {
   const listing = await checkedListing();
   const blocks = blocksUnder(listing, target);
   const caller = prospective && target === state.current ? state.caller.identity : null;
-  // Sample the caller's terminal wherever its block is. Then its busy command does not pass as a background descendant.
-  const inspected = placedBlocks(listing).filter(({ block }) => blocks.some(entry => entry.block === block) || (caller !== null && block.id === state.caller.block));
   const idle = new Set<number>();
   const held = new Set<number>();
-  const busy = await inspectBlocks(state, target, prospective, inspected, idle, held);
+  const busy = await inspectBlocks(state, target, prospective, blocks, idle, held);
   if (busy) {
     return { blocks, code: 'active_process', reason: null };
+  }
+  if (caller !== null && state.caller.block !== null) {
+    await holdOutsideCallerTerminal(listing, blocks, state.caller.block, held);
   }
   const resources: ResourcePlan = { containers: [], keep: [], paths: [], processes: [], protectedWorktrees: [], warnings: [] };
   const processes = await processSnapshot({ removeWorktrees: [target], repo: state.repo, worktrees: [target] }, resources);

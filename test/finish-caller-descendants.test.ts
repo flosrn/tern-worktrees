@@ -18,7 +18,7 @@ import {
   writeProcess,
   writeTerminal,
 } from './finish-activity-fixture.ts';
-import { useSandbox, writeTernListing, writeTernLs } from './helpers.ts';
+import { ternLog, useSandbox, writeTernListing, writeTernLs } from './helpers.ts';
 
 const descendant = (pid: number, parent: number, cwd: string, command: string): ProcessIdentity => ({ ...identity(pid, cwd, command), parent });
 const observe = (processes: ProcessIdentity[], before = ''): void => {
@@ -132,6 +132,18 @@ describe('background descendants of the pinned caller', () => {
     expectPreserved(target, log);
   });
 
+  it('keeps the current worktree for a process with the PID of the idle shell of a caller block outside the target', async () => {
+    const { dir, log, target } = await delivered();
+    const caller = identity(90_001, target);
+    const server = identity(90_000, target, 'node independent-server.js');
+    observe([caller, server]);
+    writeTernLs({ aoyama: [dir] });
+    writeTerminal(1, terminalProcess(server, 'zsh'), terminalProcess(caller));
+    const plan = await planCurrent(dir, target, caller);
+    expect(outcome(plan, target)).toStrictEqual({ candidates: [], code: 'active_process', ready: false });
+    expectPreserved(target, log);
+  });
+
   it('keeps an owned target that is not the current worktree when a caller descendant holds it', async () => {
     const { dir, log, target } = await delivered();
     const current = await addDelivered(dir, 'current', 8);
@@ -142,7 +154,7 @@ describe('background descendants of the pinned caller', () => {
     expectPreserved(target, log);
   });
 
-  it('plans an owned target that is not the current worktree while the caller terminal runs the caller', async () => {
+  it('plans an owned target that is not the current worktree and samples the caller terminal once', async () => {
     const { dir, log, target } = await delivered();
     const current = await addDelivered(dir, 'current', 8);
     const caller = identity(90_001, current);
@@ -151,6 +163,7 @@ describe('background descendants of the pinned caller', () => {
     writeTerminal(1, null, terminalProcess(caller));
     const plan = await planned('--repo', dir, '--current', current, '--owned', target, '--pid', String(caller.pid), '--block', '1');
     expect({ candidates: plan.candidates.map(candidate => candidate.path).toSorted(), ready: plan.ready }).toStrictEqual({ candidates: [current, target].toSorted(), ready: true });
+    expect(ternLog().filter(line => line.startsWith('process '))).toStrictEqual(['process 1 --json']);
     expectPreserved(target, log);
   });
 
