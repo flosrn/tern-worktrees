@@ -471,23 +471,17 @@ describe('delivery finish activity identity through system observations', () => 
   });
 
   describe('inspection warnings', () => {
-    it.each([false, true])('retains process warnings across multiple target observations without duplicates: distinct=%s', async distinct => {
+    it('reports a process warning once when one snapshot serves several merged worktrees', async () => {
       const { dir, log, target } = await delivered();
       const other = await addDelivered(dir, 'other', 8);
       const entry = identity(90_001, target, 'node server.js');
       writeProcess(entry);
       rmSync(path.join(processDirectory(entry.pid), 'stat'));
       const bin = tempDir('finish-warning-ps');
-      const lock = path.join(bin, 'first-call');
-      writeFileSync(
-        path.join(bin, 'ps'),
-        `#!/bin/sh\nif mkdir '${lock}' 2>/dev/null; then\n  printf '%s\\n' '90001 1 90001 node server.js'\nelse\n  printf '%s\\n' '90001 1 90001 ${distinct ? 'node watcher.js' : 'node server.js'}'\nfi\n`,
-        { mode: 0o755 },
-      );
+      writeFileSync(path.join(bin, 'ps'), `#!/bin/sh\nprintf '%s\\n' '90001 1 90001 node server.js'\n`, { mode: 0o755 });
       vi.stubEnv('PATH', `${bin}:${process.env.PATH ?? ''}`);
       const plan = await planned('--repo', dir, '--current', target, '--owned', other);
-      const expected = ['Process inspection incomplete: 90001 (node server.js).', ...(distinct ? ['Process inspection incomplete: 90001 (node watcher.js).'] : [])];
-      expect(plan.warnings.toSorted()).toStrictEqual(expected.toSorted());
+      expect(plan.warnings).toStrictEqual(['Process inspection incomplete: 90001 (node server.js).']);
       expect(plan.keep).toContainEqual(expect.objectContaining({ code: 'inspection_failed', path: target }));
       expect(plan.candidates.map(candidate => candidate.path)).toStrictEqual([other]);
       expectPreserved(target, log);

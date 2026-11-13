@@ -22,6 +22,7 @@
 
 ### Fix
 
+- Plan delivery finish in less than 15 s in repositories with many worktrees. Before, `finish plan` sampled Tern and all processes once for each worktree, so with 64 worktrees it needed about 25 s. The omp `session_start` handler then hit its 30 s limit and omp reported `handler timed out after 30000ms`. `finish plan` asks GitHub first, then checks the merged worktrees with one Tern listing and one process snapshot. The omp extension stops `tern-wt finish` after 25 s, so a slow call keeps the fallback of the handler
 - Type the setup line of a new worktree tab that `create` opens once its shell writes nothing for 1 s, with `tern wait --until idle=1000`. Before, `create` waited for `--until prompt`, which did not stop with Tern's native prompt and a prompt theme, for example `starship`. Thus each `create` waited 30 s and reported `setup not run: no shell prompt in 30 s`. The CLI and the plugin report `setup not run: the shell was not ready in 30 s`
 - Accept an unnamed Tern tab (`name: null`) in the listing that delivery finish checks. Before, one unnamed tab anywhere in the window kept all finish targets with `tern_failed`. Other malformed listing fields still keep the target. A tab name must be a string or `null`
 - Recognize main checkouts with an external Git directory so `env --shell` and `heavy` work there. Keep bare repositories and linked worktrees whose main checkout cannot be derived unsupported

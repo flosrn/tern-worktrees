@@ -8,11 +8,11 @@ import { nameWithOwner } from './repo-ref.ts';
 import { worktreeOwner, worktreeRoot } from './paths.ts';
 import type { WorktreeRoot } from './paths.ts';
 import { CliError } from './proc.ts';
-import type { FinishKept, FinishPlan } from './finish-types.ts';
+import type { FinishKept, FinishPlan, FinishPullRequest } from './finish-types.ts';
 import { guardWorkToLose } from './work-to-lose.ts';
 import { mergedProof } from './finish-proof.ts';
-import { finishActivity } from './finish-processes.ts';
-import type { FinishActivity } from './finish-processes.ts';
+import { finishActivity, sampleActivity } from './finish-processes.ts';
+import type { FinishActivity, FinishSample } from './finish-processes.ts';
 import { writeFinish } from './finish-store.ts';
 import type { StoredFinish } from './finish-store.ts';
 import { postMergeReady } from './finish-workflows.ts';
@@ -44,41 +44,86 @@ const inspectionFailure = (target: string, error: Error | string): FinishKept =>
   path: target,
 });
 
-const planCandidate = async (state: StoredFinish, entry: Worktree, root: WorktreeRoot, github: string | null): Promise<void> => {
+/** A merged worktree without work to lose. Only its activity check stays before it becomes a candidate. */
+interface MergedWorktree {
+  branch: string;
+  head: string;
+  path: string;
+  pr: FinishPullRequest;
+  stat: { dev: number; ino: number };
+}
+
+const mergedWorktree = async (state: StoredFinish, entry: Worktree, root: WorktreeRoot, github: string | null): Promise<MergedWorktree | null> => {
   try {
     if (entry.main || entry.locked !== null || entry.prunable || entry.branch === null) {
       state.keep.push({ code: 'not_managed', path: entry.path });
-      return;
+      return null;
     }
     if (worktreeOwner(root, state.repo, entry.path) !== 'tern') {
       state.keep.push({ code: 'not_managed', path: entry.path });
-      return;
+      return null;
     }
     if (state.excluded.includes(entry.path)) {
       state.keep.push({ code: 'retained', path: entry.path });
-      return;
+      return null;
     }
     const stat = lstatSync(entry.path);
     if (!stat.isDirectory() || stat.isSymbolicLink() || realpathSync(entry.path) !== entry.path) {
       state.keep.push({ code: 'path_identity_changed', path: entry.path });
-      return;
-    }
-    await guardWorkToLose(entry.path, { removing: state.repo }, state.repo);
-    const cause = activityCause(entry.path, await finishActivity(state, entry.path, true));
-    if (cause !== null) {
-      state.keep.push(cause);
-      return;
+      return null;
     }
     const proof = github === null ? null : await mergedProof(github, entry.branch, entry.head);
     if (proof === null) {
       state.keep.push({ code: 'not_merged', path: entry.path });
-      return;
+      return null;
     }
-    state.candidates.push({ branch: entry.branch, head: entry.head, path: entry.path, pr: proof });
-    state.identities[entry.path] = { dev: stat.dev, ino: stat.ino };
+    await guardWorkToLose(entry.path, { removing: state.repo }, state.repo);
+    return { branch: entry.branch, head: entry.head, path: entry.path, pr: proof, stat: { dev: stat.dev, ino: stat.ino } };
   } catch (error) {
     state.keep.push(inspectionFailure(entry.path, error instanceof Error ? error : String(error)));
+    return null;
   }
+};
+
+const planCandidate = async (state: StoredFinish, merged: MergedWorktree, sample: FinishSample): Promise<void> => {
+  try {
+    const cause = activityCause(merged.path, await finishActivity(state, merged.path, true, sample));
+    if (cause !== null) {
+      state.keep.push(cause);
+      return;
+    }
+    state.candidates.push({ branch: merged.branch, head: merged.head, path: merged.path, pr: merged.pr });
+    state.identities[merged.path] = merged.stat;
+  } catch (error) {
+    // SAFETY: `finishActivity` throws only a CliError or an Error of a failed process call.
+    state.keep.push(inspectionFailure(merged.path, error as Error));
+  }
+};
+
+/**
+ * Checks the activity of each merged worktree. One Tern listing and one process snapshot serve them all. The plan reads them after its
+ * git and GitHub calls stop, so its own short-lived children cannot make a process inspection fail.
+ */
+const planCandidates = async (state: StoredFinish, merged: MergedWorktree[]): Promise<void> => {
+  if (merged.length === 0) {
+    return;
+  }
+  let sample: FinishSample;
+  try {
+    sample = await sampleActivity(
+      state,
+      merged.map(entry => entry.path),
+    );
+  } catch (error) {
+    // SAFETY: `sampleActivity` throws only a CliError or an Error of a failed process call.
+    state.keep.push(...merged.map(entry => inspectionFailure(entry.path, error as Error)));
+    return;
+  }
+  await Promise.all(
+    merged.map(async entry => {
+      await planCandidate(state, entry, sample);
+    }),
+  );
 };
 
 const finishReadiness = async (state: StoredFinish, github: string | null): Promise<void> => {
@@ -142,10 +187,10 @@ export const planFinish = async (options: PlanOptions): Promise<FinishPlan> => {
   }
   const origin = await readOrigin(repo);
   const github = origin.github === null ? null : nameWithOwner(origin.github);
-  await Promise.all(
-    entries.map(async entry => {
-      await planCandidate(state, entry, root, github);
-    }),
+  const merged = await Promise.all(entries.map(async entry => await mergedWorktree(state, entry, root, github)));
+  await planCandidates(
+    state,
+    merged.filter(entry => entry !== null),
   );
   await finishReadiness(state, github);
   writeFinish(state);

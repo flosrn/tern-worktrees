@@ -58,7 +58,8 @@ export default function finishExtension(pi: FinishExtensionAPI): void {
     pi.appendEntry(entryType, structuredClone(state));
   };
   const command = async (args: string[], ctx: FinishContext): Promise<string> => {
-    const output = await pi.exec(cli, ['finish', ...args], { cwd: ctx.cwd, timeout: 30_000 });
+    // omp gives most handlers 30 s. A stop before that lets the handler use its own fallback, not time out.
+    const output = await pi.exec(cli, ['finish', ...args], { cwd: ctx.cwd, timeout: 25_000 });
     if (output.code !== 0 || output.killed) {
       throw new Error(output.stderr.trim() || `tern-wt finish failed (${output.code})`);
     }

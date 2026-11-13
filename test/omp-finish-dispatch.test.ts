@@ -25,9 +25,9 @@ describe('OMP process dispatch contract', () => {
     expect(calls.find(([command]) => command === 'git')).toStrictEqual(['git', ['-C', h.ctx.cwd, 'rev-parse', '--show-toplevel'], { cwd: h.ctx.cwd, timeout: 10_000 }]);
     expect(calls.find(([, args]) => args[1] === 'plan')?.slice(1)).toStrictEqual([
       ['finish', 'plan', '--repo', h.ctx.cwd, '--current', h.ctx.cwd, '--pid', String(process.pid), '--session', 'session-1'],
-      { cwd: h.ctx.cwd, timeout: 30_000 },
+      { cwd: h.ctx.cwd, timeout: 25_000 },
     ]);
-    expect(calls.find(([, args]) => args[1] === 'arm')?.[2]).toStrictEqual({ cwd: h.ctx.cwd, timeout: 30_000 });
+    expect(calls.find(([, args]) => args[1] === 'arm')?.[2]).toStrictEqual({ cwd: h.ctx.cwd, timeout: 25_000 });
     expect(calls.find(([, args]) => args[0] === 'ctl')?.slice(1)).toStrictEqual([
       ['ctl', 'plugins', 'run', 'plugin.tern-worktrees.finish-watch'],
       { cwd: h.ctx.cwd, timeout: 10_000 },
