@@ -1,12 +1,13 @@
+import { availableParallelism } from 'node:os';
 import { describe, expect, it } from 'vite-plus/test';
-import { inspectCleanItems } from '../src/clean-pool.ts';
+import { inspectItems } from '../src/inspection-pool.ts';
 
-describe('bounded clean inspections', () => {
-  it('keeps twelve inspections in flight and returns their input order', async () => {
+describe('bounded inspections', () => {
+  it('bounds inspections by available CPUs and eight while returning input order', async () => {
     const items = Array.from({ length: 37 }, (_, index) => index);
     let active = 0;
     let peak = 0;
-    const result = await inspectCleanItems(items, async index => {
+    const result = await inspectItems(items, async index => {
       active += 1;
       peak = Math.max(peak, active);
       await Promise.resolve();
@@ -14,13 +15,13 @@ describe('bounded clean inspections', () => {
       return `item-${index}`;
     });
     expect(result).toStrictEqual(items.map(index => `item-${index}`));
-    expect(peak).toBe(12);
+    expect(peak).toBe(Math.min(8, availableParallelism()));
     expect(active).toBe(0);
   });
 
   it('does not allocate workers for an empty collection', async () => {
     let inspected = false;
-    const result = await inspectCleanItems([], async () => {
+    const result = await inspectItems([], async () => {
       inspected = true;
       await Promise.resolve();
     });
@@ -30,7 +31,7 @@ describe('bounded clean inspections', () => {
 
   it('propagates a failed inspection rather than inventing a result', async () => {
     await expect(
-      inspectCleanItems([1], async () => {
+      inspectItems([1], async () => {
         await Promise.resolve();
         throw new Error('inspection failed');
       }),

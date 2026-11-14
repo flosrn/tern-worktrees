@@ -3,7 +3,7 @@ import path from 'node:path';
 import { directoryArgs } from '../directory-args.ts';
 import { cleanLinks, cleanReachability } from '../clean-linked.ts';
 import type { CleanPlan, PlanContext, PlannedHeads, RemovalDetail } from '../clean-plan.ts';
-import { inspectCleanItems } from '../clean-pool.ts';
+import { inspectItems } from '../inspection-pool.ts';
 import { guardCleanRecovery, recoverCleanTarget } from '../clean-recovery.ts';
 import { applyResources, planResources } from '../clean-resources.ts';
 import type { CleanProcess, ResourcePlan } from '../clean-resources.ts';
@@ -139,7 +139,7 @@ const selectBranches = (ctx: PlanContext): void => {
 
 const inspectPlan = async (ctx: PlanContext): Promise<void> => {
   const names = [...ctx.heads.branches.keys()];
-  const branchDecisions = await inspectCleanItems(names, async branch => await inspectBranch(ctx, branch));
+  const branchDecisions = await inspectItems(names, async branch => await inspectBranch(ctx, branch));
   for (const [index, branch] of names.entries()) {
     const reason = branchDecisions[index];
     if (reason === null) {
@@ -149,7 +149,7 @@ const inspectPlan = async (ctx: PlanContext): Promise<void> => {
       ctx.branchReasons.set(branch, reason);
     }
   }
-  const decisions = await inspectCleanItems(ctx.entries, async entry => await inspectWorktree(ctx, entry));
+  const decisions = await inspectItems(ctx.entries, async entry => await inspectWorktree(ctx, entry));
   for (const [index, entry] of ctx.entries.entries()) {
     const { reason, dirty } = decisions[index];
     if (reason !== null) {

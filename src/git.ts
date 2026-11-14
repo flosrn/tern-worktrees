@@ -160,12 +160,19 @@ const freePort = (start: number, used: Set<number>): number => {
 
 /** Resolves saved ports before deriving the ports of older branch worktrees. */
 const portsForBranches = async (root: string, branches: string[]): Promise<Map<string, number>> => {
-  const configured = await Promise.all(
-    branches.toSorted().map(async name => {
-      const result = await gitRun(root, 'config', '--get', `branch.${name}.ternWtPort`);
-      return { name, port: result.status === 0 ? Number(result.stdout.trim()) : null };
-    }),
+  const saved = await gitRun(root, 'config', '-z', '--get-regexp', String.raw`^branch\..*\.ternwtport$`);
+  const configuredPorts = new Map(
+    saved.stdout
+      .split('\0')
+      .filter(entry => entry !== '')
+      .map(entry => {
+        const separator = entry.indexOf('\n');
+        const key = separator === -1 ? entry : entry.slice(0, separator);
+        const value = separator === -1 ? '' : entry.slice(separator + 1);
+        return [key.slice('branch.'.length, -'.ternwtport'.length), Number(value)];
+      }),
   );
+  const configured = branches.toSorted().map(name => ({ name, port: configuredPorts.get(name) ?? null }));
   const used = new Set<number>();
   const ports = new Map<string, number>();
   for (const entry of configured) {
@@ -184,12 +191,19 @@ const portsForBranches = async (root: string, branches: string[]): Promise<Map<s
   return ports;
 };
 
-/** Reads a branch's saved base port, or derives a free port without writing config. */
-export const worktreePort = async (root: string, branch: string): Promise<number> => {
+/** Reads saved base ports, or derives free ports, for all live worktrees and the requested branches without writing config. */
+export const worktreePorts = async (root: string, requested: string[]): Promise<Map<string, number>> => {
   const listed = await worktrees(root);
   const branches = new Set(listed.filter(worktree => !worktree.main && !worktree.prunable).flatMap(worktree => (worktree.branch === null ? [] : [worktree.branch])));
-  branches.add(branch);
-  const ports = await portsForBranches(root, [...branches]);
+  for (const branch of requested) {
+    branches.add(branch);
+  }
+  return await portsForBranches(root, [...branches]);
+};
+
+/** Reads a branch's saved base port, or derives a free port without writing config. */
+export const worktreePort = async (root: string, branch: string): Promise<number> => {
+  const ports = await worktreePorts(root, [branch]);
   return Number(ports.get(branch));
 };
 

@@ -22,6 +22,7 @@
 
 ### Fix
 
+- Bound concurrent Git inspections to the available processors, at most eight. Apply the limit to `list`, delivery finish plans, `clean`, repository lookup and Tern pane lookup. Read worktree ports once for each repository. Read saved branch ports in one Git call. Previously, each worktree started one config call for each branch. Preserve list order, ports and changed-file warnings
 - Let delivery finish plan the current worktree of the caller when background descendants of the caller run in it. Examples are the omp subagent broker and the eval kernel. Prove each descendant through its parent links in one process sample, until a process with the pinned caller identity. A missing link, a cycle or a chain to PID 1 still keeps the worktree. A busy foreground command in the terminal of the caller still keeps it. Other selected worktrees and the check at execution do not change: a descendant that runs after the caller exits keeps the worktree with `active_process`. Before, an omp session that used subagents or eval could not plan removal of its own worktree
 - Accept an unnamed Tern tab (`name: null`) in the listing that delivery finish checks. Before, one unnamed tab anywhere in the window kept all finish targets with `tern_failed`. Other malformed listing fields still keep the target. A tab name must be a string or `null`
 - Recognize main checkouts with an external Git directory so `env --shell` and `heavy` work there. Keep bare repositories and linked worktrees whose main checkout cannot be derived unsupported
