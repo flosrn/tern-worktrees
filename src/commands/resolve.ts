@@ -2,6 +2,7 @@ import path from 'node:path';
 import { directoryArgs } from '../directory-args.ts';
 import { repoRoot } from '../git.ts';
 import { readOrigin } from '../github.ts';
+import { inspectItems } from '../inspection-pool.ts';
 import { repoKey } from '../repo-ref.ts';
 
 /** The repository that holds a directory, with null values when the directory is not in a repository. */
@@ -25,11 +26,8 @@ const resolveDir = async (dir: string): Promise<ResolvedDir> => {
 /** `resolve <dir>...`: the repository root, name, GitHub owner and origin of each directory. Each distinct directory resolves once. */
 export const run = async (args: string[]): Promise<{ repos: ResolvedDir[] }> => {
   const { positionals, originalPositionals } = directoryArgs({ allowPositionals: true, args, options: {} });
-  const byDir = new Map<string, Promise<ResolvedDir>>();
-  const repos = positionals.map(async (dir, index) => {
-    const resolving = byDir.get(dir) ?? resolveDir(dir);
-    byDir.set(dir, resolving);
-    return { ...(await resolving), dir: originalPositionals[index] };
-  });
-  return { repos: await Promise.all(repos) };
+  const unique = [...new Set(positionals)];
+  const resolved = await inspectItems(unique, resolveDir);
+  const byDir = new Map(unique.map((dir, index) => [dir, index]));
+  return { repos: positionals.map((dir, index) => ({ ...resolved[Number(byDir.get(dir))], dir: originalPositionals[index] })) };
 };

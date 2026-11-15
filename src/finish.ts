@@ -16,6 +16,7 @@ import type { FinishActivity } from './finish-processes.ts';
 import { writeFinish } from './finish-store.ts';
 import type { StoredFinish } from './finish-store.ts';
 import { postMergeReady } from './finish-workflows.ts';
+import { inspectItems } from './inspection-pool.ts';
 
 interface PlanOptions {
   repo: string;
@@ -142,11 +143,9 @@ export const planFinish = async (options: PlanOptions): Promise<FinishPlan> => {
   }
   const origin = await readOrigin(repo);
   const github = origin.github === null ? null : nameWithOwner(origin.github);
-  await Promise.all(
-    entries.map(async entry => {
-      await planCandidate(state, entry, root, github);
-    }),
-  );
+  await inspectItems(entries, async entry => {
+    await planCandidate(state, entry, root, github);
+  });
   await finishReadiness(state, github);
   writeFinish(state);
   const { id, ready, candidates, keep, warnings } = state;

@@ -1,7 +1,8 @@
 import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { directoryArgs } from '../directory-args.ts';
-import { changedFileCount, checkoutAt, currentBranch, requireRepoRoot, worktreePort } from '../git.ts';
+import { changedFileCount, checkoutAt, currentBranch, requireRepoRoot, worktreePorts } from '../git.ts';
+import { inspectItems } from '../inspection-pool.ts';
 import { worktreeOwner, worktreeRoot } from '../paths.ts';
 import type { WorktreeRoot } from '../paths.ts';
 
@@ -65,7 +66,7 @@ const readWorktree = async (root: WorktreeRoot, dir: string, all: boolean): Prom
       dirty: changed.count > 0,
       owner,
       path: dir,
-      port: branch === null ? null : await worktreePort(checkout.main, branch),
+      port: null,
       repo: checkout.main,
     },
   };
@@ -80,8 +81,19 @@ export const run = async (args: string[]): Promise<ListResult> => {
   const root = await worktreeRoot();
   const mainCheckout = repo === undefined ? null : await requireRepoRoot(repo);
   const startDir = mainCheckout === null || all ? root.dir : path.join(root.dir, path.basename(mainCheckout));
-  const found = await Promise.all(walk(startDir).map(async dir => await readWorktree(root, dir, all)));
+  const found = await inspectItems(walk(startDir), async dir => await readWorktree(root, dir, all));
   const listed = found.filter((entry): entry is Found => entry !== null && (mainCheckout === null || entry.worktree.repo === mainCheckout));
+  const repositories = [...new Set(listed.map(entry => entry.worktree.repo))];
+  await inspectItems(repositories, async main => {
+    const entries = listed.filter(entry => entry.worktree.repo === main);
+    const ports = await worktreePorts(
+      main,
+      entries.flatMap(entry => (entry.worktree.branch === null ? [] : [entry.worktree.branch])),
+    );
+    for (const { worktree } of entries) {
+      worktree.port = worktree.branch === null ? null : Number(ports.get(worktree.branch));
+    }
+  });
   return {
     root: root.dir,
     warnings: listed.flatMap(entry => (entry.warning === null ? [] : [entry.warning])),

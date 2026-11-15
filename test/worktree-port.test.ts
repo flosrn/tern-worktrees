@@ -28,6 +28,15 @@ describe('worktree ports', () => {
     await expect(git(repo.dir, 'config', '--get-regexp', '^branch\\..*\\.ternWtPort$')).rejects.toMatchObject({ code: 'git_failed' });
   });
 
+  it('preserves a saved port whose Git config entry has no value', async () => {
+    const repo = await tmpRepo('aoyama');
+    const linked = managedPath('feature-x');
+    await git(repo.dir, 'worktree', 'add', '-b', 'feature/x', linked);
+    const config = path.join(repo.dir, '.git', 'config');
+    writeFileSync(config, `${readFileSync(config, 'utf-8')}\n[branch "feature/x"]\n\tternWtPort\n`);
+    await expect(main(['env', linked])).resolves.toMatchObject({ stdout: '{"env":{"TERN_WT_PORT":"0"}}\n' });
+  });
+
   it('exports the linked worktree port to prepare and heavy commands', async () => {
     const repo = await tmpRepo('aoyama');
     const linked = path.join(tempDir('linked'), 'prepared');
