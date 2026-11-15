@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { repoRoot } from './git.ts';
+import { inspectItems } from './inspection-pool.ts';
 import { isJsonObject, isString } from './json.ts';
 import { envVar, isUnder } from './paths.ts';
 import { CliError, must, run } from './proc.ts';
@@ -199,7 +200,9 @@ export const waitForQuiet = async (block: number, quietMs: number, seconds: numb
   return true;
 };
 
-const placedBlocks = (listing: TernListing): PlacedBlock[] => listing.sessions.flatMap(session => session.tabs.flatMap(tab => tab.blocks.map(block => ({ block, session, tab }))));
+/** All blocks of `listing`, with the session and tab that hold each one. */
+export const placedBlocks = (listing: TernListing): PlacedBlock[] =>
+  listing.sessions.flatMap(session => session.tabs.flatMap(tab => tab.blocks.map(block => ({ block, session, tab }))));
 
 const cwdOf = (block: TernBlock): string | null => (block.cwd === '' ? null : block.cwd);
 
@@ -214,7 +217,7 @@ export const blocksUnder = (listing: TernListing, dir: string): PlacedBlock[] =>
 export const sessionForRepo = async (listing: TernListing, root: string): Promise<TernSession | null> => {
   const placed = placedBlocks(listing);
   const cwds = [...new Set(placed.map(({ block }) => cwdOf(block)))];
-  const roots = new Map(await Promise.all(cwds.map(async cwd => [cwd, cwd === null ? null : await repoRoot(cwd)] as const)));
+  const roots = new Map(await inspectItems(cwds, async cwd => [cwd, cwd === null ? null : await repoRoot(cwd)] as const));
   return placed.find(({ block }) => roots.get(cwdOf(block)) === root)?.session ?? null;
 };
 

@@ -2,7 +2,7 @@ import { cpSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { run } from '../src/commands/list.ts';
-import { cliJson, contract, git, logGitCalls, readLog, tempDir, tmpRepo, useOmp, useSandbox } from './helpers.ts';
+import { cliJson, contract, git, gitShim, logGitCalls, readLog, tempDir, tmpRepo, useOmp, useSandbox } from './helpers.ts';
 import type { RepoFixture, Sandbox } from './helpers.ts';
 
 let sandbox: Sandbox;
@@ -15,6 +15,49 @@ const addWorktree = async (target: RepoFixture, dirName: string, ...flags: strin
   await git(target.dir, 'worktree', 'add', '--quiet', ...flags, dir, 'origin/main');
   return dir;
 };
+
+describe('list inspections', () => {
+  beforeEach(async () => {
+    sandbox = useSandbox();
+    repo = await tmpRepo('aoyama');
+  });
+
+  it('bounds concurrent worktree reads while preserving discovery order', async () => {
+    const dirs: string[] = [];
+    for (let index = 0; index < 24; index += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      dirs.push(await addWorktree(repo, `worktree-${String(index).padStart(2, '0')}`, '-b', `branch-${index}`));
+    }
+    const log = path.join(tempDir('concurrent-reads'), 'reads.log');
+    await gitShim(`if [ "$3" = rev-parse ]; then
+      printf 'start\\n' >> '${log}'
+      sleep 0.15
+      printf 'end\\n' >> '${log}'
+    fi`);
+    const result = await run(['--all']);
+    let active = 0;
+    let peak = 0;
+    for (const event of readLog(log)) {
+      active += event === 'start' ? 1 : -1;
+      peak = Math.max(peak, active);
+    }
+    expect(result.worktrees.map(worktree => worktree.path)).toStrictEqual(dirs);
+    expect(peak).toBeGreaterThan(0);
+    expect(peak).toBeLessThanOrEqual(8);
+    expect(active).toBe(0);
+  });
+
+  it('reads repository ports once rather than once per worktree and branch', async () => {
+    await addWorktree(repo, 'feature-x', '-b', 'feature/x');
+    await addWorktree(repo, 'feature-y', '-b', 'feature/y');
+    const log = await logGitCalls();
+    const result = await run(['--all']);
+    expect(result.worktrees.map(worktree => worktree.port)).toStrictEqual([5610, 5780]);
+    const calls = readLog(log);
+    expect(calls.filter(call => call.includes('worktree list'))).toHaveLength(1);
+    expect(calls.filter(call => call.includes(' config '))).toHaveLength(1);
+  });
+});
 
 describe('list command', () => {
   beforeEach(async () => {

@@ -16,6 +16,7 @@ import type { FinishActivity, FinishSample } from './finish-processes.ts';
 import { writeFinish } from './finish-store.ts';
 import type { StoredFinish } from './finish-store.ts';
 import { postMergeReady } from './finish-workflows.ts';
+import { inspectItems } from './inspection-pool.ts';
 
 interface PlanOptions {
   repo: string;
@@ -119,11 +120,9 @@ const planCandidates = async (state: StoredFinish, merged: MergedWorktree[]): Pr
     state.keep.push(...merged.map(entry => inspectionFailure(entry.path, error as Error)));
     return;
   }
-  await Promise.all(
-    merged.map(async entry => {
-      await planCandidate(state, entry, sample);
-    }),
-  );
+  await inspectItems(merged, async entry => {
+    await planCandidate(state, entry, sample);
+  });
 };
 
 const finishReadiness = async (state: StoredFinish, github: string | null): Promise<void> => {
@@ -187,7 +186,7 @@ export const planFinish = async (options: PlanOptions): Promise<FinishPlan> => {
   }
   const origin = await readOrigin(repo);
   const github = origin.github === null ? null : nameWithOwner(origin.github);
-  const merged = await Promise.all(entries.map(async entry => await mergedWorktree(state, entry, root, github)));
+  const merged = await inspectItems(entries, async entry => await mergedWorktree(state, entry, root, github));
   await planCandidates(
     state,
     merged.filter(entry => entry !== null),
