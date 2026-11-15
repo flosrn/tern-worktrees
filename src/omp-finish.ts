@@ -58,13 +58,14 @@ export default function finishExtension(pi: FinishExtensionAPI): void {
     pi.appendEntry(entryType, structuredClone(state));
   };
   const command = async (args: string[], ctx: FinishContext): Promise<string> => {
-    const output = await pi.exec(cli, ['finish', ...args], { cwd: ctx.cwd, timeout: 30_000 });
+    // omp gives most handlers 30 s. A stop before that lets the handler use its own fallback, not time out.
+    const output = await pi.exec(cli, ['finish', ...args], { cwd: ctx.cwd, timeout: 25_000 });
     if (output.code !== 0 || output.killed) {
       throw new Error(output.stderr.trim() || `tern-wt finish failed (${output.code})`);
     }
     return output.stdout;
   };
-  const planFor = async (ctx: FinishContext): Promise<FinishPlan> => {
+  const planFor = async (ctx: FinishContext, currentOnly = false): Promise<FinishPlan> => {
     const checkout = await pi.exec('git', ['-C', ctx.cwd, 'rev-parse', '--show-toplevel'], { cwd: ctx.cwd, timeout: 10_000 });
     const current = checkout.stdout.trim();
     if (checkout.code !== 0 || checkout.killed || !path.isAbsolute(current)) {
@@ -80,6 +81,9 @@ export default function finishExtension(pi: FinishExtensionAPI): void {
     }
     for (const retained of state.retained ?? []) {
       args.push('--exclude', retained);
+    }
+    if (currentOnly) {
+      args.push('--current-only');
     }
     return parseFinishPlan(await command(args, ctx));
   };
@@ -100,7 +104,8 @@ export default function finishExtension(pi: FinishExtensionAPI): void {
     }
     if (state.baselineMerged === undefined) {
       try {
-        const plan = await planFor(ctx);
+        // The automatic check compares only the current worktree with this baseline, so the plan examines no other worktree.
+        const plan = await planFor(ctx, true);
         state.baselineMerged = plan.candidates.map(candidate => `${candidate.path}:${candidate.head}`);
       } catch {
         delete state.baselineMerged;

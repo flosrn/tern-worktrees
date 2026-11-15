@@ -4,6 +4,11 @@ import { askInput, askReply, FinishHost, host } from './omp-finish-host.ts';
 import { tempDir, tmpRepo, useSandbox } from './helpers.ts';
 
 describe('OMP process dispatch contract', () => {
+  it('plans only the current worktree at session start', async () => {
+    const h = await host();
+    expect(h.calls().find(call => call[1] === 'plan')).toContain('--current-only');
+  });
+
   it('pins the checkout, caller identity and execution deadlines at each process boundary', async () => {
     const h = await host();
     const execute = h.api.exec.bind(h.api);
@@ -25,9 +30,9 @@ describe('OMP process dispatch contract', () => {
     expect(calls.find(([command]) => command === 'git')).toStrictEqual(['git', ['-C', h.ctx.cwd, 'rev-parse', '--show-toplevel'], { cwd: h.ctx.cwd, timeout: 10_000 }]);
     expect(calls.find(([, args]) => args[1] === 'plan')?.slice(1)).toStrictEqual([
       ['finish', 'plan', '--repo', h.ctx.cwd, '--current', h.ctx.cwd, '--pid', String(process.pid), '--session', 'session-1'],
-      { cwd: h.ctx.cwd, timeout: 30_000 },
+      { cwd: h.ctx.cwd, timeout: 25_000 },
     ]);
-    expect(calls.find(([, args]) => args[1] === 'arm')?.[2]).toStrictEqual({ cwd: h.ctx.cwd, timeout: 30_000 });
+    expect(calls.find(([, args]) => args[1] === 'arm')?.[2]).toStrictEqual({ cwd: h.ctx.cwd, timeout: 25_000 });
     expect(calls.find(([, args]) => args[0] === 'ctl')?.slice(1)).toStrictEqual([
       ['ctl', 'plugins', 'run', 'plugin.tern-worktrees.finish-watch'],
       { cwd: h.ctx.cwd, timeout: 10_000 },

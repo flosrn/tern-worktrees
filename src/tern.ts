@@ -184,10 +184,13 @@ export const typeInto = async (block: number, line: string): Promise<void> => {
   await must([ternBin(), 'run', String(block), line], 'tern_failed');
 };
 
-/** Waits a maximum of `seconds` for the shell of `block` to show its prompt. Gives true at the prompt and false on a timeout (exit 124). Throws `tern_failed` on a different exit status. */
-export const waitForPrompt = async (block: number, seconds: number): Promise<boolean> => {
+/**
+ * Waits a maximum of `seconds` for the program of `block` to write nothing for `quietMs`, as a shell does once it shows its prompt. Gives true when it is quiet and false on a timeout (exit 124).
+ * Throws `tern_failed` on a different exit status. It reads no prompt marks: a prompt theme can drop them, so `tern wait --until prompt` can wait in vain.
+ */
+export const waitForQuiet = async (block: number, quietMs: number, seconds: number): Promise<boolean> => {
   const bin = ternBin();
-  const result = await run([bin, 'wait', String(block), '--until', 'prompt', '--timeout', String(seconds)]);
+  const result = await run([bin, 'wait', String(block), '--until', `idle=${quietMs}`, '--timeout', String(seconds)]);
   if (result.status === 124) {
     return false;
   }

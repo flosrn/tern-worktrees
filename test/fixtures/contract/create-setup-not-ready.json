@@ -15,5 +15,5 @@
     "opened": true,
     "session": "work"
   },
-  "warnings": ["setup not run: no shell prompt in 30 s"]
+  "warnings": ["setup not run: the shell was not ready in 30 s"]
 }

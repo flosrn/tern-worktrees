@@ -26,6 +26,8 @@ interface PlanOptions {
   pid?: number;
   block?: number;
   session?: string;
+  /** Examines only the `current` worktree. From the main checkout, no worktree. */
+  currentOnly?: boolean;
 }
 
 const activityCause = (target: string, activity: FinishActivity): FinishKept | null => {
@@ -143,7 +145,8 @@ export const planFinish = async (options: PlanOptions): Promise<FinishPlan> => {
   }
   const origin = await readOrigin(repo);
   const github = origin.github === null ? null : nameWithOwner(origin.github);
-  await inspectItems(entries, async entry => {
+  const examined = options.currentOnly === true ? entries.filter(entry => entry.path === current) : entries;
+  await inspectItems(examined, async entry => {
     await planCandidate(state, entry, root, github);
   });
   await finishReadiness(state, github);

@@ -16,7 +16,7 @@ local function setup_warning(name: string): string
 	return serde.decode("json", Stub.fixture(name, CREATE_VARS)).warnings[1]
 end
 
-local NO_PROMPT = setup_warning("create-setup-no-prompt")
+local NOT_READY = setup_warning("create-setup-not-ready")
 local OPEN_BEFORE = setup_warning("create-setup-open-before")
 local NO_TAB = "setup not run: no tab opened"
 
@@ -66,7 +66,7 @@ test("type_setup toasts the line when no prompt shows in 30 s", function()
 	local toasts = Stub.setup_toasts(cx)
 	eq(#toasts, 1, "setup toasts at 30 s")
 	eq(toasts[1].level, "error", "toast level")
-	eq(toasts[1].title, "Setup not run: no shell prompt in 30 s", "toast title")
+	eq(toasts[1].title, "Setup not run: the shell was not ready in 30 s", "toast title")
 	eq(toasts[1].detail, LINE, "toast detail")
 	plugin:tick(1000)
 	eq(#Stub.setup_toasts(cx), 1, "setup toasts after 31 s")
@@ -207,7 +207,7 @@ test("a Carly create replies typed = false with the warning when no prompt shows
 	plugin:tick(200)
 	eq(#replies, 1, "replies at 30 s")
 	eq(replies[1].setup.typed, false, "setup typed")
-	eq(replies[1].warnings[1], NO_PROMPT, "warning")
+	eq(replies[1].warnings[1], NOT_READY, "warning")
 	eq(#cx.typed, 0, "typed")
 end)
 

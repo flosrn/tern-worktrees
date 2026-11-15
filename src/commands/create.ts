@@ -15,14 +15,16 @@ import { isUnder, worktreeOwner, worktreePath, worktreeRoot } from '../paths.ts'
 import type { WorktreeOwner, WorktreeRoot } from '../paths.ts';
 import { CliError } from '../proc.ts';
 import { nameWithOwner } from '../repo-ref.ts';
-import { openWorktreeTab, typeInto, waitForPrompt } from '../tern.ts';
+import { openWorktreeTab, typeInto, waitForQuiet } from '../tern.ts';
 import type { WorktreeTab } from '../tern.ts';
 import { guardWorkToLose } from '../work-to-lose.ts';
 
 /** How `create` got the worktree. */
 export type CreateStatus = 'created' | 'relocated' | 'reused';
-/** How long `create` waits for the shell prompt of the tab it opened before it types the setup commands. */
-const SETUP_PROMPT_SECONDS = 30;
+/** How long `create` waits for the shell of the tab it opened to be ready before it types the setup commands. */
+const SETUP_READY_SECONDS = 30;
+/** How long the shell writes nothing before `create` counts it as ready: startup output stops once the prompt shows. */
+const SETUP_QUIET_MS = 1000;
 /** Who owns the worktree that `create` gives: `tern` or `omp` as {@link worktreeOwner} says, or `main` for the main checkout. */
 type Owner = Exclude<WorktreeOwner, null> | 'main';
 
@@ -426,8 +428,8 @@ const tryOpenTab = async (ctx: Context, placed: Placed): Promise<WorktreeTab | n
 };
 
 /**
- * Types `line` into the tab that `create` opened when its shell shows the prompt. Gives true when it typed the line. Without a tab it adds no warning: the caller types the line.
- * A tab that was open before, no prompt in {@link SETUP_PROMPT_SECONDS} and a Tern failure each add a warning and keep the worktree.
+ * Types `line` into the tab that `create` opened once its shell is ready: the shell wrote nothing for {@link SETUP_QUIET_MS}. Gives true when it typed the line. Without a tab it adds no warning: the caller types the line.
+ * A tab that was open before, no ready shell in {@link SETUP_READY_SECONDS} and a Tern failure each add a warning and keep the worktree.
  */
 const typeSetup = async (ctx: Context, line: string, tab: WorktreeTab | null): Promise<boolean> => {
   if (tab === null) {
@@ -438,14 +440,14 @@ const typeSetup = async (ctx: Context, line: string, tab: WorktreeTab | null): P
     return false;
   }
   try {
-    if (!(await waitForPrompt(tab.block, SETUP_PROMPT_SECONDS))) {
-      ctx.warnings.push(`setup not run: no shell prompt in ${SETUP_PROMPT_SECONDS} s`);
+    if (!(await waitForQuiet(tab.block, SETUP_QUIET_MS, SETUP_READY_SECONDS))) {
+      ctx.warnings.push(`setup not run: the shell was not ready in ${SETUP_READY_SECONDS} s`);
       return false;
     }
     await typeInto(tab.block, line);
     return true;
   } catch (error) {
-    // SAFETY: `waitForPrompt` and `typeInto` throw a CliError only.
+    // SAFETY: `waitForQuiet` and `typeInto` throw a CliError only.
     ctx.warnings.push(`setup not run: ${(error as CliError).message}`);
     return false;
   }

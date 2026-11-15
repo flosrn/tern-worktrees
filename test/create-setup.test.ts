@@ -9,7 +9,7 @@ import type { RepoFixture, Sandbox } from './helpers.ts';
 const ACTIVATE = 'eval "$(tern-wt env . --shell)"';
 const LINE = `${ACTIVATE} && npm ci && npm test`;
 
-const WAIT = 'wait 42 --until prompt --timeout 30';
+const WAIT = 'wait 42 --until idle=1000 --timeout 30';
 
 let sandbox: Sandbox;
 let repo: RepoFixture;
@@ -187,10 +187,10 @@ describe('create command', () => {
       expect(setupCalls()).toStrictEqual([WAIT, `run 42 ${ACTIVATE}`]);
     });
 
-    it('keeps the worktree and warns when the shell shows no prompt', async () => {
+    it('keeps the worktree and warns when the shell is not ready', async () => {
       vi.stubEnv('FAKE_TERN_WAIT_STATUS', '124');
       await expect(cliJson(['create', '--repo', repo.dir, '--branch', 'feature/x'])).resolves.toStrictEqual(
-        contract('create-setup-no-prompt', { repo: repo.dir, worktree: managedPath('feature-x') }),
+        contract('create-setup-not-ready', { repo: repo.dir, worktree: managedPath('feature-x') }),
       );
       expect(setupCalls()).toStrictEqual([WAIT]);
       expect(existsSync(managedPath('feature-x'))).toBeTruthy();
