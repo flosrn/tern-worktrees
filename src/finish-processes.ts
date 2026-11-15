@@ -40,22 +40,13 @@ const validSession = (session: PlacedBlock['session']): boolean => {
   return Array.isArray(session.tabs) && session.tabs.every(validTab);
 };
 
-/** One Tern listing and one process snapshot, shared by the activity checks of more than one target. */
-export interface FinishSample {
-  listing: TernListing;
-  processes: ProcessIdentity[];
-  resources: ResourcePlan;
-}
-
-/** Samples Tern and the processes once for `targets`. A malformed Tern listing cannot prove that worktree tabs are not active. */
-export const sampleActivity = async (state: StoredFinish, targets: string[]): Promise<FinishSample> => {
+/** A malformed Tern listing cannot prove that worktree tabs are not active. */
+const checkedListing = async (): Promise<TernListing> => {
   const listing = await ls();
   if (!isJsonObject(listing) || !Array.isArray(listing.sessions) || !listing.sessions.every(validSession)) {
     throw new CliError('tern_failed', 'Cannot inspect Tern sessions: invalid listing');
   }
-  const resources: ResourcePlan = { containers: [], keep: [], paths: [], processes: [], protectedWorktrees: [], warnings: [] };
-  const processes = await processSnapshot({ removeWorktrees: targets, repo: state.repo, worktrees: targets }, resources);
-  return { listing, processes, resources };
+  return listing;
 };
 
 /** Exempts the caller terminal's idle shell and holds its busy command against the ancestry exemption. */
@@ -111,9 +102,9 @@ const holdOutsideCallerTerminal = async (listing: TernListing, blocks: PlacedBlo
   }
 };
 
-/** Reads process resources without sending a signal. `sample` must cover `target`. Without it, `target` is sampled alone. */
-export const finishActivity = async (state: StoredFinish, target: string, prospective: boolean, sample?: FinishSample): Promise<FinishActivity> => {
-  const { listing, processes, resources } = sample ?? (await sampleActivity(state, [target]));
+/** Reads process resources without sending a signal. */
+export const finishActivity = async (state: StoredFinish, target: string, prospective: boolean): Promise<FinishActivity> => {
+  const listing = await checkedListing();
   const blocks = blocksUnder(listing, target);
   const caller = prospective && target === state.current ? state.caller.identity : null;
   const idle = new Set<number>();
@@ -125,6 +116,8 @@ export const finishActivity = async (state: StoredFinish, target: string, prospe
   if (caller !== null && state.caller.block !== null) {
     await holdOutsideCallerTerminal(listing, blocks, state.caller.block, held);
   }
+  const resources: ResourcePlan = { containers: [], keep: [], paths: [], processes: [], protectedWorktrees: [], warnings: [] };
+  const processes = await processSnapshot({ removeWorktrees: [target], repo: state.repo, worktrees: [target] }, resources);
   state.warnings.push(...resources.warnings.filter(warning => !state.warnings.includes(warning)));
   if (resources.protectedWorktrees.includes(target)) {
     return { blocks, code: 'inspection_failed', reason: resources.warnings.join(' ') };

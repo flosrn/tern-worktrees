@@ -4,6 +4,11 @@ import { askInput, askReply, FinishHost, host } from './omp-finish-host.ts';
 import { tempDir, tmpRepo, useSandbox } from './helpers.ts';
 
 describe('OMP process dispatch contract', () => {
+  it('plans only the current worktree at session start', async () => {
+    const h = await host();
+    expect(h.calls().find(call => call[1] === 'plan')).toContain('--current-only');
+  });
+
   it('pins the checkout, caller identity and execution deadlines at each process boundary', async () => {
     const h = await host();
     const execute = h.api.exec.bind(h.api);

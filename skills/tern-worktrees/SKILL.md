@@ -149,12 +149,12 @@ Before reporting completed work, read [Delivery finish limits](../../docs/README
 The CLI protocol is:
 
 ```sh
-tern-wt finish plan --repo <dir> [--current <worktree>] [--owned <path> ...] [--exclude <path> ...] [--pid <pid>] [--block <block>] [--session <id>]
+tern-wt finish plan --repo <dir> [--current <worktree>] [--current-only] [--owned <path> ...] [--exclude <path> ...] [--pid <pid>] [--block <block>] [--session <id>]
 tern-wt finish arm <id> --choice current|merged|none [--selected <path> ...]
 tern-wt finish status <id>
 ```
 
-`plan` examines Git refs and worktrees without changing them, then saves a private local plan. It returns `id`, `repo`, `current`, `ready`, `candidates`, `keep` and `warnings`. Each candidate has `path`, `branch`, `head` and a `pr` proof with `number`, `url`, `headRefOid`, `mergeCommit` and `mergedAt`. Each kept target has `path`, `code` and optional `detail`, as defined below. `ready` needs merged PR evidence at the same commit IDs as the run and successful applicable post-merge workflows.
+`plan` examines Git refs and worktrees without changing them, then saves a private local plan. `--current-only` examines only the `--current` worktree, and no worktree from the main checkout. It returns `id`, `repo`, `current`, `ready`, `candidates`, `keep` and `warnings`. Each candidate has `path`, `branch`, `head` and a `pr` proof with `number`, `url`, `headRefOid`, `mergeCommit` and `mergedAt`. Each kept target has `path`, `code` and optional `detail`, as defined below. `ready` needs merged PR evidence at the same commit IDs as the run and successful applicable post-merge workflows.
 
 Only call `arm` after explicit consent to that saved preview. Supply `--selected` for each approved canonical path. The CLI compares this set with the saved selection before it starts a worker. A mismatch stops arm without teardown. `current` selects its eligible current and registered run paths. `merged` selects its saved candidates, and `none` records refusal with an empty selection. It returns `id`, `status` and `selected`. A PR merged after approval cannot expand the selection. Do not replace this lifecycle with `remove --force`, `--keep-tab` or `--close-busy-tabs`.
 

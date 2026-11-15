@@ -77,6 +77,17 @@ describe('finish planning conditions', () => {
     expect(plan.candidates.map(candidate => candidate.path)).toStrictEqual([target]);
   });
 
+  it('examines only the current worktree with --current-only, and none from the main checkout', async () => {
+    const { dir, target } = await fixture();
+    const other = managedPath('other');
+    await git(dir, 'worktree', 'add', '-b', 'other', other);
+    const fromWorktree = await planned('--repo', dir, '--current', target, '--current-only');
+    expect({ candidates: fromWorktree.candidates.map(candidate => candidate.path), keep: fromWorktree.keep }).toStrictEqual({ candidates: [target], keep: [] });
+    expect(ghLog().filter(line => line.includes('--head other'))).toStrictEqual([]);
+    const fromMain = await planned('--repo', dir, '--current', dir, '--current-only');
+    expect({ candidates: fromMain.candidates, current: fromMain.current, keep: fromMain.keep }).toStrictEqual({ candidates: [], current: null, keep: [] });
+  });
+
   it('keeps an explicitly excluded owned worktree before inspecting its merged delivery', async () => {
     const { dir, target } = await fixture();
     const log = await logGitCalls();

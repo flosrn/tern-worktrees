@@ -9,13 +9,14 @@ const plan = async (args: string[]): Promise<object> => {
     allowPositionals: true,
     args,
     options: {
-      block: { type: 'string' },
-      current: { type: 'string' },
-      exclude: { multiple: true, type: 'string' },
-      owned: { multiple: true, type: 'string' },
-      pid: { type: 'string' },
-      repo: { type: 'string' },
-      session: { type: 'string' },
+      'block': { type: 'string' },
+      'current': { type: 'string' },
+      'current-only': { type: 'boolean' },
+      'exclude': { multiple: true, type: 'string' },
+      'owned': { multiple: true, type: 'string' },
+      'pid': { type: 'string' },
+      'repo': { type: 'string' },
+      'session': { type: 'string' },
     },
   });
   const invalidNumber = [values.pid, values.block].some(value => value !== undefined && (!/^[1-9]\d*$/u.test(value) || !Number.isSafeInteger(Number(value))));
@@ -25,6 +26,7 @@ const plan = async (args: string[]): Promise<object> => {
   return await planFinish({
     block: values.block === undefined ? undefined : Number(values.block),
     current: values.current,
+    currentOnly: values['current-only'],
     excluded: values.exclude ?? [],
     owned: values.owned ?? [],
     pid: values.pid === undefined ? undefined : Number(values.pid),

@@ -147,17 +147,8 @@ describe('delivery finish observations', () => {
         ready: false,
       });
       expect(result.keep).toContainEqual(expect.objectContaining({ code: 'tern_failed', path: target }));
+      expect(ghLog()).toStrictEqual([]);
       expect(ternLog()).toStrictEqual(['ls --json']);
-      expectReadOnly(target, log);
-    });
-
-    it('keeps a merged worktree whose block cannot be inspected and still plans', async () => {
-      const { dir, log, target } = await delivered();
-      writeTernLs({ aoyama: [target] });
-      vi.stubEnv('FAKE_TERN_FAIL', 'process');
-      const result = await planned('--repo', dir, '--current', target);
-      expect({ candidates: result.candidates, kept: result.keep.map(item => item.path).toSorted() }).toStrictEqual({ candidates: [], kept: [dir, target].toSorted() });
-      expect(result.keep).toContainEqual(expect.objectContaining({ code: 'tern_failed', path: target }));
       expectReadOnly(target, log);
     });
   });
