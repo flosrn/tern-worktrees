@@ -1,8 +1,11 @@
-import fs, { chmodSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { once } from 'node:events';
+import fs, { chmodSync, mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
+import { createServer } from 'node:net';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { guardWorkToLose } from '../src/work-to-lose.ts';
+import { must } from '../src/proc.ts';
 import { git, gitShim, ignoreGlobally, tempDir, tmpRepo, useSandbox } from './helpers.ts';
 
 const writeFiles = (dir: string, files: Record<string, string>): void => {
@@ -136,5 +139,182 @@ describe('work-to-lose inspection failures', () => {
     const failure = guardWorkToLose(dir, 'recreating', dir);
     await expect(failure).rejects.toMatchObject({ code: 'dirty_worktree' });
     await expect(failure).rejects.toThrow(/inspection exited 7/u);
+  });
+
+  it('ignores FIFO and socket entries without carrying or opening them', async () => {
+    vi.stubEnv('TMPDIR', '/tmp');
+    const { dir } = await tmpRepo();
+    await ignoreGlobally('local/');
+    const local = path.join(dir, 'local');
+    mkdirSync(local);
+    await must(['mkfifo', path.join(local, 'pipe')], 'git_failed');
+    const server = createServer();
+    server.listen(path.join(local, 'socket'));
+    await once(server, 'listening');
+    try {
+      await expect(guardWorkToLose(dir, 'recreating', dir)).resolves.toStrictEqual([]);
+      await expect(guardWorkToLose(dir, { removing: tempDir('main') }, dir)).resolves.toStrictEqual([]);
+    } finally {
+      const closed = once(server, 'close');
+      server.close();
+      await closed;
+    }
+  }, 5000);
+});
+
+describe('directory identity races', () => {
+  beforeEach(() => {
+    useSandbox();
+  });
+
+  it.each(['local', 'local/nested'])('refuses a directory replaced during direct reading at %s', async relative => {
+    const { dir } = await tmpRepo();
+    await ignoreGlobally('local/');
+    writeFiles(dir, { [`${relative}/private.env`]: 'local settings\n' });
+    const changed = path.join(dir, relative);
+    const saved = path.join(dir, 'saved');
+    const empty = tempDir('empty-directory');
+    const original = fs.readdirSync;
+    let replaced = false;
+    const listing = vi.spyOn(fs, 'readdirSync').mockImplementation((file, options) => {
+      if (file === changed && !replaced) {
+        replaced = true;
+        renameSync(changed, saved);
+        symlinkSync(empty, changed);
+      }
+      return original(file, options);
+    });
+    syncBuiltinESMExports();
+    try {
+      await expect(guardWorkToLose(dir, 'recreating', dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
+    } finally {
+      listing.mockRestore();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it('refuses a file removed after its directory entries were listed', async () => {
+    const { dir } = await tmpRepo();
+    await ignoreGlobally('local/');
+    writeFiles(dir, { 'local/private.env': 'local settings\n' });
+    const original = fs.readdirSync;
+    const local = path.join(dir, 'local');
+    const listing = vi.spyOn(fs, 'readdirSync').mockImplementation((file, options) => {
+      const entries = original(file, options);
+      if (file === local) {
+        rmSync(path.join(local, 'private.env'), { force: true });
+      }
+      return entries;
+    });
+    syncBuiltinESMExports();
+    try {
+      await expect(guardWorkToLose(dir, 'recreating', dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
+    } finally {
+      listing.mockRestore();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it('refuses a child directory replaced between its parent inspection and descent', async () => {
+    const { dir } = await tmpRepo();
+    await ignoreGlobally('local/');
+    writeFiles(dir, { 'local/nested/private.env': 'local settings\n' });
+    const nested = path.join(dir, 'local', 'nested');
+    const original = fs.lstatSync;
+    let replaced = false;
+    const stat = vi.spyOn(fs, 'lstatSync').mockImplementation((file, options) => {
+      const found = original(file, options);
+      if (file === nested && !replaced) {
+        replaced = true;
+        renameSync(nested, path.join(dir, 'saved'));
+        mkdirSync(nested);
+      }
+      return found;
+    });
+    syncBuiltinESMExports();
+    try {
+      await expect(guardWorkToLose(dir, 'recreating', dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
+    } finally {
+      stat.mockRestore();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it('refuses a parent directory replaced while its child is inspected', async () => {
+    const { dir } = await tmpRepo();
+    await ignoreGlobally('local/');
+    mkdirSync(path.join(dir, 'local', 'nested'), { recursive: true });
+    const local = path.join(dir, 'local');
+    const nested = path.join(local, 'nested');
+    const original = fs.readdirSync;
+    let replaced = false;
+    const listing = vi.spyOn(fs, 'readdirSync').mockImplementation((file, options) => {
+      const entries = original(file, options);
+      if (file === nested && !replaced) {
+        replaced = true;
+        renameSync(local, path.join(dir, 'saved'));
+        mkdirSync(path.join(local, 'nested'), { recursive: true });
+      }
+      return entries;
+    });
+    syncBuiltinESMExports();
+    try {
+      await expect(guardWorkToLose(dir, 'recreating', dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
+    } finally {
+      listing.mockRestore();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it.each(['dev', 'ino'] as const)('refuses a directory whose %s changes during inspection', async key => {
+    const { dir } = await tmpRepo();
+    await ignoreGlobally('local/');
+    mkdirSync(path.join(dir, 'local'));
+    const local = path.join(dir, 'local');
+    const original = fs.lstatSync;
+    let reads = 0;
+    const stat = vi.spyOn(fs, 'lstatSync').mockImplementation((file, options) => {
+      const found = original(file, options);
+      reads += Number(file === local);
+      if (file === local && found !== undefined && reads > 1) {
+        Object.defineProperty(found, key, { value: Number(found[key]) + 1 });
+      }
+      return found;
+    });
+    syncBuiltinESMExports();
+    try {
+      await expect(guardWorkToLose(dir, 'recreating', dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
+    } finally {
+      stat.mockRestore();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it.each(['missing', 'directory'])('refuses a Git-listed ignored file that is now %s', async kind => {
+    const { dir } = await tmpRepo();
+    if (kind === 'directory') {
+      mkdirSync(path.join(dir, 'local.tsbuildinfo'));
+    }
+    await gitShim(`if [ "$3" = ls-files ]; then printf 'local.tsbuildinfo\\0'; exit 0; fi`);
+    const failure = guardWorkToLose(dir, 'recreating', dir);
+    await expect(failure).rejects.toMatchObject({ code: 'dirty_worktree' });
+    await expect(failure).rejects.toThrow(/could not be inspected/u);
+  });
+});
+
+describe('unverified nested repository markers', () => {
+  beforeEach(() => {
+    useSandbox();
+  });
+
+  it('conservatively retains ignored directories with an unverified .git marker', async () => {
+    const { dir } = await tmpRepo();
+    await ignoreGlobally('local/');
+    writeFiles(dir, { 'local/.git': 'not a repository\n', 'local/generated.tsbuildinfo': 'generated\n' });
+    await expect(guardWorkToLose(dir, { removing: tempDir('main') }, dir)).rejects.toMatchObject({
+      code: 'dirty_worktree',
+      extra: { files: ['!! local/'], hardToRebuild: ['local/'] },
+    });
+    await expect(guardWorkToLose(dir, 'recreating', dir)).resolves.toStrictEqual(['local/']);
   });
 });

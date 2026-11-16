@@ -2,7 +2,8 @@ import { chmodSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from 'no
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vite-plus/test';
 import type { FinishPlan } from '../src/finish-types.ts';
-import { git, gitShim, ignoreGlobally, managedPath, spawnCli, tmpRepo, useSandbox, writeTernLs } from './helpers.ts';
+import { must } from '../src/proc.ts';
+import { git, gitShim, ignoreGlobally, managedPath, spawnCli, tempDir, tmpRepo, useSandbox, writeTernLs } from './helpers.ts';
 
 const fixture = async () => {
   const repo = await tmpRepo('runtime');
@@ -79,5 +80,49 @@ describe('ignored-file safety through the real Bun CLI', () => {
     expect(result.keep).toMatchObject([{ code: 'dirty_worktree', path: target }]);
     expect(result.keep[0].detail).toMatch(/Permission denied/u);
     expect(existsSync(target)).toBeTruthy();
+  });
+
+  it('keeps a collapsed directory replaced with a symbolic link after the real Git listing', async () => {
+    const { dir, target } = await fixture();
+    await ignoreGlobally('*');
+    const local = path.join(target, 'local');
+    const saved = path.join(target, 'saved-local');
+    const empty = tempDir('empty-link-target');
+    mkdirSync(local);
+    writeFileSync(path.join(local, 'private.env'), 'local settings\n');
+    const gitPath = await must(['sh', '-c', 'command -v git'], 'git_failed');
+    const realGit = gitPath.trim();
+    await gitShim(`if [ "$3" = ls-files ]; then
+  '${realGit}' "$@"
+  status=$?
+  mv '${local}' '${saved}'
+  ln -s '${empty}' '${local}'
+  exit "$status"
+fi`);
+    const result = plan(dir, target);
+    expect(result.candidates).toStrictEqual([]);
+    expect(result.keep).toMatchObject([{ code: 'dirty_worktree', path: target }]);
+    expect(existsSync(path.join(saved, 'private.env'))).toBeTruthy();
+  });
+
+  it('keeps a listed ignored file replaced by a directory before inspection', async () => {
+    const { dir, target } = await fixture();
+    await ignoreGlobally('*');
+    const file = path.join(target, 'local.tsbuildinfo');
+    writeFileSync(file, 'generated\n');
+    const gitPath = await must(['sh', '-c', 'command -v git'], 'git_failed');
+    const realGit = gitPath.trim();
+    await gitShim(`if [ "$3" = ls-files ]; then
+  '${realGit}' "$@"
+  status=$?
+  mv '${file}' '${target}/saved.tsbuildinfo'
+  mkdir '${file}'
+  printf 'local settings\\n' > '${file}/private.env'
+  exit "$status"
+fi`);
+    const result = plan(dir, target);
+    expect(result.candidates).toStrictEqual([]);
+    expect(result.keep).toMatchObject([{ code: 'dirty_worktree', path: target }]);
+    expect(existsSync(path.join(file, 'private.env'))).toBeTruthy();
   });
 });

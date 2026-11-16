@@ -1,8 +1,11 @@
+import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { run } from '../src/commands/create.ts';
-import { cliJson, contract, headName, ghPrView, git, ignoreGlobally, managedPath, ompLog, tempDir, tmpRepo, useGithubOrigin, useOmp, useSandbox } from './helpers.ts';
+import type { CreateResult } from '../src/commands/create.ts';
+import { must } from '../src/proc.ts';
+import { cliJson, contract, headName, ghPrView, git, ignoreGlobally, managedPath, ompLog, REPO_DIR, tempDir, tmpRepo, useGithubOrigin, useOmp, useSandbox } from './helpers.ts';
 import type { RepoFixture, Sandbox } from './helpers.ts';
 
 const SUBMODULE_REFUSED = 'recreated: git worktree move refused (fatal: working trees containing submodules cannot be moved or removed)';
@@ -229,6 +232,26 @@ describe('create command', () => {
           status: 'relocated',
           warnings: [SUBMODULE_REFUSED],
         });
+      });
+
+      it('never carries or opens a FIFO while rebuilding a relocated worktree through Bun', async () => {
+        allowFileProtocol();
+        await ignoreGlobally('local/');
+        const old = await submoduleWorktree();
+        mkdirSync(path.join(old, 'local'));
+        writeFileSync(path.join(old, 'local', 'private.env'), 'local settings\n');
+        await must(['mkfifo', path.join(old, 'local', 'pipe')], 'git_failed');
+        const output = spawnSync(path.join(REPO_DIR, 'bin', 'tern-wt'), ['create', '--repo', repo.dir, '--branch', 'feature/s', '--relocate', '--no-tab'], {
+          encoding: 'utf-8',
+          timeout: 5000,
+        });
+        expect(output.error).toBeUndefined();
+        expect(output.status).toBe(0);
+        // SAFETY: the real CLI returned the successful CreateResult JSON envelope.
+        const result = JSON.parse(output.stdout) as CreateResult;
+        expect(result.carried).toStrictEqual(['local/private.env']);
+        expect(readFileSync(path.join(result.path, 'local', 'private.env'), 'utf-8')).toBe('local settings\n');
+        expect(existsSync(path.join(result.path, 'local', 'pipe'))).toBeFalsy();
       });
 
       it('keeps the staged copy of a carried file that the new worktree already has', async () => {
