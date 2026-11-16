@@ -297,8 +297,8 @@ describe('work to lose', () => {
       expect(error.extra).toStrictEqual({ changes: [], existing: dir, files: expected.map(file => `!! ${file}`), hardToRebuild: expected });
       await expect(guardWorkToLose(dir, 'recreating', dir)).resolves.toStrictEqual(expected);
       const listings = readLog(log).filter(call => call.includes(' ls-files '));
-      expect(listings.filter(call => !call.includes(' --directory') && !call.includes(' -- :('))).toStrictEqual([]);
-      expect(listings.filter(call => call.includes(' -- :(')).every(call => !call.includes('node_modules'))).toBeTruthy();
+      expect(listings.every(call => call.includes(' --directory'))).toBeTruthy();
+      expect(listings).toHaveLength(2);
     });
 
     it('reports each nested submodule hard-to-rebuild file once without listing rebuildable directories', async () => {
@@ -324,8 +324,8 @@ describe('work to lose', () => {
       expect(error.extra).toStrictEqual({ changes: [], existing: dir, files: expected.map(file => `!! ${file}`), hardToRebuild: expected });
       await expect(guardWorkToLose(dir, 'recreating', dir)).resolves.toStrictEqual(expected);
       const listings = readLog(log).filter(call => call.includes(`${inner} ls-files `));
-      expect(listings.filter(call => !call.includes(' --directory') && !call.includes(' -- :('))).toStrictEqual([]);
-      expect(listings.filter(call => call.includes(' -- :(')).every(call => !call.includes('node_modules'))).toBeTruthy();
+      expect(listings.every(call => call.includes(' --directory'))).toBeTruthy();
+      expect(listings).toHaveLength(2);
     });
 
     it.each(['GIT_LITERAL_PATHSPECS', 'GIT_GLOB_PATHSPECS', 'GIT_NOGLOB_PATHSPECS', 'GIT_ICASE_PATHSPECS'])('protects ignored directories independently of %s', async variable => {
@@ -342,23 +342,19 @@ describe('work to lose', () => {
         code: 'dirty_worktree',
         extra: { changes: [], files: ['!! local/settings.env'], hardToRebuild: ['local/settings.env'] },
       });
-      expect(readLog(log)).toStrictEqual(['0 0 0 0', '0 0 0 0', '0 0 0 0', '0 0 0 0']);
+      expect(readLog(log)).toStrictEqual(['0 0 0 0', '0 0 0 0']);
     });
 
-    it('keeps work to lose when an ignored directory is missing from a successful expansion', async () => {
+    it('keeps work to lose when a listed ignored directory disappears before it can be read', async () => {
       const { dir } = await tmpRepo();
-      await ignoreGlobally('local/', 'other/');
-      writeFiles(dir, { 'local/settings.env': 'local settings\n', 'other/settings.env': 'other local settings\n' });
-      await gitShim(`if [ "$3" = ls-files ] && [ "$8" = -- ]; then printf 'local/settings.env\\0'; exit 0; fi`);
+      await gitShim(`if [ "$3" = ls-files ]; then printf 'missing/\\0'; exit 0; fi`);
       await expect(guardWorkToLose(dir, 'recreating', dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
       await expect(guardWorkToLose(dir, { removing: tempDir('main') }, dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
     });
 
-    it('keeps work to lose when ignored directory expansion fails even with partial output', async () => {
+    it('keeps work to lose when ignored directory listing fails even with partial output', async () => {
       const { dir } = await tmpRepo();
-      await ignoreGlobally('local/');
-      writeFiles(dir, { 'local/settings.env': 'local settings\n' });
-      await gitShim(`if [ "$3" = ls-files ] && [ "$8" = -- ]; then printf 'local/settings.env\\0'; echo 'expansion failed' >&2; exit 9; fi`);
+      await gitShim(`if [ "$3" = ls-files ]; then printf 'local/settings.env\\0'; echo 'listing failed' >&2; exit 9; fi`);
       await expect(guardWorkToLose(dir, 'recreating', dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
       await expect(guardWorkToLose(dir, { removing: tempDir('main') }, dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
     });

@@ -1,5 +1,6 @@
+import { isUtf8 } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { constants, cpSync, lstatSync, realpathSync, rmSync } from 'node:fs';
+import { constants, cpSync, lstatSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CliError, must, run } from './proc.ts';
@@ -423,22 +424,52 @@ export const unpushedCommits = async (dir: string, retained: string | null): Pro
   return lines(await gitMust(dir, 'rev-list', '--abbrev-commit', 'HEAD', '--branches', '--not', '--remotes', ...(kept ? [retained] : [])));
 };
 
+const ignoredOutput = async (dir: string, args: string[]): Promise<string> => {
+  const output = await run(['git', '-C', dir, ...args], {
+    env: { GIT_GLOB_PATHSPECS: '0', GIT_ICASE_PATHSPECS: '0', GIT_LITERAL_PATHSPECS: '0', GIT_NOGLOB_PATHSPECS: '0' },
+    strictUtf8: true,
+  });
+  if (output.status !== 0 || output.stderr !== '') {
+    throw new CliError('dirty_worktree', output.stderr.trim() || `Ignored file inspection exited ${output.status}`, { existing: dir });
+  }
+  return output.stdout;
+};
+
+const readIgnoredDirectory = (dir: string, relative: string, pruned: readonly string[]): string[] => {
+  try {
+    const entries = readdirSync(path.join(dir, relative), { encoding: 'buffer' });
+    if (entries.some(entry => !isUtf8(entry))) {
+      throw new Error('A path name cannot be decoded as UTF-8 without loss');
+    }
+    if (entries.some(entry => entry.equals(Buffer.from('.git')))) {
+      return [relative];
+    }
+    const files: string[] = [];
+    for (const entry of entries) {
+      const name = entry.toString();
+      if (lstatSync(path.join(dir, relative, name)).isDirectory()) {
+        if (!pruned.includes(name)) {
+          files.push(...readIgnoredDirectory(dir, `${relative}${name}/`, pruned));
+        }
+      } else {
+        files.push(`${relative}${name}`);
+      }
+    }
+    return files;
+  } catch (error) {
+    throw new CliError('dirty_worktree', `Ignored directory ${relative} could not be read: ${String(error)}`, { existing: dir });
+  }
+};
+
 /** The ignored files with `pruned` directory segments omitted, once each, relative to `dir`. It does not look into submodules. */
 export const ignoredFiles = async (dir: string, pruned: readonly string[]): Promise<string[]> => {
   const args = ['ls-files', '-z', '--others', '--ignored', '--exclude-standard'];
-  const options = { env: { GIT_GLOB_PATHSPECS: '0', GIT_ICASE_PATHSPECS: '0', GIT_LITERAL_PATHSPECS: '0', GIT_NOGLOB_PATHSPECS: '0' } };
-  const output = await must(['git', '-C', dir, ...args, '--directory', '--no-empty-directory'], 'git_failed', options);
+  const output = await ignoredOutput(dir, [...args, '--directory']);
   const entries = output.split('\0').filter(file => file !== '');
   const directories = entries.filter(file => file.endsWith('/') && !file.split('/').some(segment => pruned.includes(segment)));
   const files = entries.filter(file => !file.endsWith('/'));
-  if (directories.length > 0) {
-    const expanded = await must(['git', '-C', dir, ...args, '--', ...directories.map(directory => `:(literal)${directory}`)], 'dirty_worktree', options);
-    const listed = expanded.split('\0').filter(file => file !== '');
-    const missing = directories.filter(directory => !listed.some(file => file.startsWith(directory)));
-    if (missing.length > 0) {
-      throw new CliError('dirty_worktree', `Ignored directories could not be inspected in ${dir}`, { existing: dir, files: missing.map(directory => `!! ${directory}`) });
-    }
-    files.push(...listed);
+  for (const directory of directories) {
+    files.push(...readIgnoredDirectory(dir, directory, pruned));
   }
   return [...new Set(files)].toSorted();
 };
