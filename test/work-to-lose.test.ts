@@ -1,9 +1,9 @@
 import { mkdirSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { beforeEach, describe, expect, it } from 'vite-plus/test';
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { CliError } from '../src/proc.ts';
 import { guardWorkToLose } from '../src/work-to-lose.ts';
-import { git, ignoreGlobally, logGitCalls, readLog, tempDir, tmpRepo, useSandbox } from './helpers.ts';
+import { git, gitShim, ignoreGlobally, logGitCalls, readLog, tempDir, tmpRepo, useSandbox } from './helpers.ts';
 
 const nestedSubmodules = async (): Promise<string> => {
   const inner = await tmpRepo('inner');
@@ -272,7 +272,104 @@ describe('work to lose', () => {
       await expect(guardWorkToLose(dir, 'recreating', dir)).rejects.toMatchObject({ code: 'git_failed' });
       await expect(guardWorkToLose(dir, { removing: tempDir('main') }, dir)).rejects.toMatchObject({ code: 'git_failed' });
     });
+  });
 
+  describe('pruned ignored directories', () => {
+    it('reports each hard-to-rebuild file once beside and inside ignored directories for teardown and relocate', async () => {
+      const { dir } = await tmpRepo();
+      writeFiles(dir, { 'mixed/tracked.txt': 'tracked\n' });
+      await git(dir, 'add', 'mixed/tracked.txt');
+      await git(dir, 'commit', '--quiet', '-m', 'track mixed directory');
+      await ignoreGlobally('node_modules/', 'local*/', 'mixed/', '*.env');
+      const packages = Object.fromEntries(Array.from({ length: 200 }, (_, index) => [`node_modules/package-${index}/index.js`, 'installed\n']));
+      writeFiles(dir, {
+        ...packages,
+        'local2/other.env': 'other local settings\n',
+        'local[1]/nested/node_modules/package/index.js': 'installed\n',
+        'local[1]/settings.env': 'local settings\n',
+        'mixed/ignored.env': 'local settings\n',
+        'sibling.env': 'local settings\n',
+      });
+      const expected = ['local2/other.env', 'local[1]/settings.env', 'mixed/ignored.env', 'sibling.env'];
+      const log = await logGitCalls();
+      const error = await rejection(guardWorkToLose(dir, { removing: tempDir('main') }, dir));
+      expect(error.code).toBe('dirty_worktree');
+      expect(error.extra).toStrictEqual({ changes: [], existing: dir, files: expected.map(file => `!! ${file}`), hardToRebuild: expected });
+      await expect(guardWorkToLose(dir, 'recreating', dir)).resolves.toStrictEqual(expected);
+      const listings = readLog(log).filter(call => call.includes(' ls-files '));
+      expect(listings.every(call => call.includes(' --directory'))).toBeTruthy();
+      // Two guards, each with two inspections.
+      expect(listings).toHaveLength(4);
+    });
+
+    it('reports each nested submodule hard-to-rebuild file once without listing rebuildable directories', async () => {
+      const dir = await nestedSubmodules();
+      const inner = path.join(dir, 'outer', 'inner');
+      writeFiles(inner, { 'mixed/tracked.txt': 'tracked\n' });
+      await git(inner, 'add', 'mixed/tracked.txt');
+      await git(inner, 'commit', '--quiet', '-m', 'track mixed directory');
+      await git(path.join(dir, 'outer'), 'commit', '--quiet', '-am', 'pin inner');
+      await git(dir, 'commit', '--quiet', '-am', 'pin outer');
+      await ignoreGlobally('node_modules/', 'local/', 'mixed/', '*.env');
+      writeFiles(inner, {
+        'local/nested/node_modules/package/index.js': 'installed\n',
+        'local/settings.env': 'local settings\n',
+        'mixed/ignored.env': 'local settings\n',
+        'node_modules/package/index.js': 'installed\n',
+        'sibling.env': 'local settings\n',
+      });
+      const expected = ['outer/inner/local/settings.env', 'outer/inner/mixed/ignored.env', 'outer/inner/sibling.env'];
+      const log = await logGitCalls();
+      const error = await rejection(guardWorkToLose(dir, { removing: tempDir('main') }, dir));
+      expect(error.code).toBe('dirty_worktree');
+      expect(error.extra).toStrictEqual({ changes: [], existing: dir, files: expected.map(file => `!! ${file}`), hardToRebuild: expected });
+      await expect(guardWorkToLose(dir, 'recreating', dir)).resolves.toStrictEqual(expected);
+      const listings = readLog(log).filter(call => call.includes(`${inner} ls-files `));
+      expect(listings.every(call => call.includes(' --directory'))).toBeTruthy();
+      expect(listings).toHaveLength(4);
+    });
+
+    it.each(['GIT_LITERAL_PATHSPECS', 'GIT_GLOB_PATHSPECS', 'GIT_NOGLOB_PATHSPECS', 'GIT_ICASE_PATHSPECS'])('protects ignored directories independently of %s', async variable => {
+      const { dir } = await tmpRepo();
+      await ignoreGlobally('local/');
+      writeFiles(dir, { 'local/settings.env': 'local settings\n' });
+      const log = path.join(tempDir('pathspec-env'), 'git.log');
+      await gitShim(
+        `if [ "$3" = ls-files ]; then printf '%s %s %s %s\\n' "$GIT_LITERAL_PATHSPECS" "$GIT_GLOB_PATHSPECS" "$GIT_NOGLOB_PATHSPECS" "$GIT_ICASE_PATHSPECS" >>'${log}'; fi`,
+      );
+      vi.stubEnv(variable, '1');
+      await expect(guardWorkToLose(dir, 'recreating', dir)).resolves.toStrictEqual(['local/settings.env']);
+      await expect(guardWorkToLose(dir, { removing: tempDir('main') }, dir)).rejects.toMatchObject({
+        code: 'dirty_worktree',
+        extra: { changes: [], files: ['!! local/settings.env'], hardToRebuild: ['local/settings.env'] },
+      });
+      expect(readLog(log)).toStrictEqual(['0 0 0 0', '0 0 0 0', '0 0 0 0', '0 0 0 0']);
+    });
+
+    it('keeps work to lose when a listed ignored directory disappears before it can be read', async () => {
+      const { dir } = await tmpRepo();
+      await gitShim(`if [ "$3" = ls-files ]; then printf 'missing/\\0'; exit 0; fi`);
+      await expect(guardWorkToLose(dir, 'recreating', dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
+      await expect(guardWorkToLose(dir, { removing: tempDir('main') }, dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
+    });
+
+    it('keeps work to lose when ignored directory listing fails even with partial output', async () => {
+      const { dir } = await tmpRepo();
+      await gitShim(`if [ "$3" = ls-files ]; then printf 'local/settings.env\\0'; echo 'listing failed' >&2; exit 9; fi`);
+      await expect(guardWorkToLose(dir, 'recreating', dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
+      await expect(guardWorkToLose(dir, { removing: tempDir('main') }, dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
+    });
+
+    it('does not invent work to lose for empty ignored directories', async () => {
+      const { dir } = await tmpRepo();
+      await ignoreGlobally('local/');
+      mkdirSync(path.join(dir, 'local', 'empty'), { recursive: true });
+      await expect(guardWorkToLose(dir, 'recreating', dir)).resolves.toStrictEqual([]);
+      await expect(guardWorkToLose(dir, { removing: tempDir('main') }, dir)).resolves.toStrictEqual([]);
+    });
+  });
+
+  describe('ignored files', () => {
     it('gives relocate each ignored file outside the rebuildable dirs to carry, in submodules at each depth too', async () => {
       const dir = await nestedSubmodules();
       await ignoreGlobally(

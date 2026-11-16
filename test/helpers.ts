@@ -150,6 +150,23 @@ export const gitShim = async (script: string): Promise<string> => {
   return dir;
 };
 
+/** Makes the `listing`th `git ls-files` run the real Git, then the shell `commands`. Thus the tree changes once, right after that Git listing. */
+export const afterGitListing = async (listing: number, commands: string): Promise<void> => {
+  const gitPath = await must(['sh', '-c', 'command -v git'], 'git_failed');
+  const realGit = gitPath.trim();
+  const count = path.join(tempDir('listing'), 'count');
+  await gitShim(`if [ "$3" = ls-files ]; then
+  '${realGit}' "$@"
+  status=$?
+  seen=$(($(cat '${count}' 2>/dev/null || echo 0) + 1))
+  echo "$seen" > '${count}'
+  if [ "$seen" = ${listing} ]; then
+    ${commands}
+  fi
+  exit "$status"
+fi`);
+};
+
 /** Makes `git remote get-url origin` answer `repoUrl`, so the commands see a GitHub origin. Returns the directory of the fake git. */
 export const useGithubOrigin = async (repoUrl = 'https://github.com/virtusize/aoyama.git'): Promise<string> =>
   await gitShim(`if [ "$3 $4 $5" = "remote get-url origin" ]; then echo '${repoUrl}'; exit 0; fi`);

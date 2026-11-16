@@ -1,3 +1,4 @@
+import { isUtf8 } from 'node:buffer';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import type { TernProcess } from './tern.ts';
@@ -57,6 +58,8 @@ export interface RunResult {
 export interface RunOptions {
   cwd?: string;
   env?: Record<string, string>;
+  /** Rejects standard output with bytes that cannot be decoded as UTF-8 without loss. */
+  strictUtf8?: boolean;
 }
 
 /**
@@ -79,7 +82,11 @@ export const run = async (argv: string[], opts: RunOptions = {}): Promise<RunRes
   } catch (error) {
     return { status: 127, stderr: String(error), stdout: '' };
   }
-  return { status: child.exitCode ?? 1, stderr: Buffer.concat(stderr).toString(), stdout: Buffer.concat(stdout).toString() };
+  const output = Buffer.concat(stdout);
+  if (opts.strictUtf8 === true && !isUtf8(output)) {
+    return { status: 1, stderr: 'A path name cannot be decoded as UTF-8 without loss', stdout: '' };
+  }
+  return { status: child.exitCode ?? 1, stderr: Buffer.concat(stderr).toString(), stdout: output.toString() };
 };
 
 /** Runs `argv` and returns its `stdout`, or throws a `CliError` with `code` when it exits with a status other than 0. */

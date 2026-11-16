@@ -104,10 +104,10 @@ const changesIn = async (dir: string, subs: string[], main: string): Promise<str
 /** The ignored files of the worktree at `dir` and of each submodule in `subs` that are hard to rebuild, as paths relative to `dir`. */
 const hardToRebuildIn = async (dir: string, subs: string[]): Promise<string[]> => {
   const ignoredIn = async (sub: string): Promise<string[]> => {
-    const files = await ignoredFiles(path.join(dir, sub));
+    const files = await ignoredFiles(path.join(dir, sub), REBUILDABLE);
     return files.map(file => `${sub}/${file}`);
   };
-  const [own, nested] = await Promise.all([ignoredFiles(dir), Promise.all(subs.map(ignoredIn))]);
+  const [own, nested] = await Promise.all([ignoredFiles(dir, REBUILDABLE), Promise.all(subs.map(ignoredIn))]);
   return [...own, ...nested.flat()].filter(file => !file.endsWith('.tsbuildinfo') && !file.split('/').some(segment => REBUILDABLE.includes(segment)));
 };
 
@@ -119,11 +119,18 @@ const hardToRebuildIn = async (dir: string, subs: string[]): Promise<string[]> =
  *
  * The error holds `changes`, `hardToRebuild` and `files`. `changes` holds the `git status --porcelain` lines, then for each submodule its
  * `<sub>: <line>` and `<sub>: unpushed <commit>` entries. `hardToRebuild` holds the blocking hard-to-rebuild files, relative to `dir`.
- * `files` holds the changes, then a `!! <path>` entry for each blocking hard-to-rebuild file.
+ * `files` holds the changes, then a `!! <path>` entry for each blocking hard-to-rebuild file. It also stops when it cannot examine the ignored
+ * files, or when two inspections give different results. That error holds only `existing`.
  */
 export const guardWorkToLose = async (dir: string, operation: Guarded, main: string): Promise<string[]> => {
   const subs = await submodules(dir);
+  // A directory renamed between the Git listing and the direct read makes the read see its replacement. A second inspection starts after the
+  // first one stops and sees the tree after the rename. The status that runs with it sees the same tree.
+  const first = await hardToRebuildIn(dir, subs);
   const [changes, hardToRebuild] = await Promise.all([changesIn(dir, subs, main), hardToRebuildIn(dir, subs)]);
+  if (first.length !== hardToRebuild.length || first.some((file, index) => file !== hardToRebuild[index])) {
+    throw new CliError('dirty_worktree', `${dir} changed while its ignored files were inspected`, { existing: dir });
+  }
   const { blocking, carried, doing }: { blocking: string[]; carried: string[]; doing: string } =
     operation === 'recreating'
       ? { blocking: [], carried: hardToRebuild, doing: operation }

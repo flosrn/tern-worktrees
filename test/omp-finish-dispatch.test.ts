@@ -199,6 +199,21 @@ describe('OMP initial process state', () => {
     expect(h.calls()).toStrictEqual([]);
   });
 
+  it.each([
+    { code: -1, stderr: '' },
+    { code: 0, stderr: 'terminated at the deadline' },
+  ])('keeps every worktree and the tab when the plan times out: %j', async ({ code, stderr }) => {
+    const h = await host();
+    const execute = h.api.exec.bind(h.api);
+    h.api.exec = async (command, args, options) => (args[1] === 'plan' ? { code, killed: true, stderr, stdout: '' } : await execute(command, args, options));
+    await h.tool({ action: 'ready' });
+    const response = await h.emit('session_stop');
+    expect(response?.additionalContext).toContain('tern-wt finish plan timed out after 25 s');
+    expect(response?.additionalContext).toContain('keep all worktrees and this tab');
+    expect(response?.additionalContext).not.toContain('<form');
+    expect(h.shutdowns()).toBe(0);
+  });
+
   it('reports the failed CLI exit when stderr contains no actual diagnostic', async () => {
     const h = await host();
     const execute = h.api.exec.bind(h.api);

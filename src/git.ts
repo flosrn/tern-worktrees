@@ -1,5 +1,7 @@
+import { isUtf8 } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { constants, cpSync, lstatSync, realpathSync, rmSync } from 'node:fs';
+import { constants, cpSync, lstatSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import type { Stats } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CliError, must, run } from './proc.ts';
@@ -423,8 +425,97 @@ export const unpushedCommits = async (dir: string, retained: string | null): Pro
   return lines(await gitMust(dir, 'rev-list', '--abbrev-commit', 'HEAD', '--branches', '--not', '--remotes', ...(kept ? [retained] : [])));
 };
 
-/** The ignored files of the worktree at `dir`, one entry for each file, as paths relative to `dir`. It does not look into submodules. */
-export const ignoredFiles = async (dir: string): Promise<string[]> => {
-  const output = await gitMust(dir, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard');
-  return output.split('\0').filter(file => file !== '');
+const ignoredOutput = async (dir: string, args: string[]): Promise<string> => {
+  const output = await run(['git', '-C', dir, ...args], {
+    env: { GIT_ADVICE: '0', GIT_GLOB_PATHSPECS: '0', GIT_ICASE_PATHSPECS: '0', GIT_LITERAL_PATHSPECS: '0', GIT_NOGLOB_PATHSPECS: '0' },
+    strictUtf8: true,
+  });
+  if (output.status !== 0 || output.stderr !== '') {
+    throw new CliError('dirty_worktree', output.stderr.trim() || `Ignored file inspection exited ${output.status}`, { existing: dir });
+  }
+  return output.stdout;
+};
+
+const inspectedDirectory = (directory: string, expected?: Pick<Stats, 'dev' | 'ino'>): Stats => {
+  const stat = lstatSync(directory);
+  if (!stat.isDirectory()) {
+    throw new Error('The ignored directory changed type before inspection');
+  }
+  if (expected !== undefined && (stat.dev !== expected.dev || stat.ino !== expected.ino)) {
+    throw new Error('The ignored directory changed identity during inspection');
+  }
+  return stat;
+};
+
+/** Appends each of `items` to `target` with a loop. A spread into one call overflows the stack with a large number of items. */
+const pushAll = (target: string[], items: string[]): void => {
+  for (const item of items) {
+    target.push(item);
+  }
+};
+
+const readIgnoredDirectory = (dir: string, relative: string, pruned: readonly string[], expected?: { dev: number; ino: number }): string[] => {
+  try {
+    const directory = path.join(dir, relative.slice(0, -1));
+    const before = inspectedDirectory(directory, expected);
+    const entries = readdirSync(directory, { encoding: 'buffer' });
+    inspectedDirectory(directory, before);
+    if (entries.some(entry => !isUtf8(entry))) {
+      throw new Error('A path name cannot be decoded as UTF-8 without loss');
+    }
+    if (entries.some(entry => entry.equals(Buffer.from('.git')))) {
+      return [relative];
+    }
+    const files: string[] = [];
+    for (const entry of entries) {
+      const name = entry.toString();
+      const stat = lstatSync(path.join(dir, relative, name));
+      if (stat.isDirectory()) {
+        if (!pruned.includes(name)) {
+          pushAll(files, readIgnoredDirectory(dir, `${relative}${name}/`, pruned, stat));
+        }
+      } else if (stat.isFile() || stat.isSymbolicLink()) {
+        files.push(`${relative}${name}`);
+      }
+    }
+    inspectedDirectory(directory, before);
+    return files;
+  } catch (error) {
+    throw new CliError('dirty_worktree', `Ignored directory ${relative} could not be read: ${String(error)}`, { existing: dir });
+  }
+};
+
+/**
+ * The ignored files with `pruned` directory segments omitted, once each, relative to `dir`. It does not look into submodules. A file in a
+ * directory that is read comes from the read alone. Git can also list it with a different normalization, for example NFC for an NFD name on macOS.
+ */
+export const ignoredFiles = async (dir: string, pruned: readonly string[]): Promise<string[]> => {
+  const args = ['ls-files', '-z', '--others', '--ignored', '--exclude-standard'];
+  const output = await ignoredOutput(dir, [...args, '--directory']);
+  const entries = output.split('\0').filter(file => file !== '');
+  const directories = entries.filter(file => file.endsWith('/') && !file.split('/').some(segment => pruned.includes(segment)));
+  const read = new Set(directories);
+  const underRead = (file: string): boolean => {
+    for (let end = file.indexOf('/'); end !== -1; end = file.indexOf('/', end + 1)) {
+      if (read.has(file.slice(0, end + 1))) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const files = entries.filter(file => !file.endsWith('/') && !underRead(file));
+  for (const file of files) {
+    try {
+      const stat = lstatSync(path.join(dir, file));
+      if (!stat.isFile() && !stat.isSymbolicLink()) {
+        throw new Error('The ignored file changed type before inspection');
+      }
+    } catch (error) {
+      throw new CliError('dirty_worktree', `Ignored file ${file} could not be inspected: ${String(error)}`, { existing: dir });
+    }
+  }
+  for (const directory of directories) {
+    pushAll(files, readIgnoredDirectory(dir, directory, pruned));
+  }
+  return [...new Set(files)].toSorted();
 };
