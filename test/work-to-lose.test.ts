@@ -298,7 +298,8 @@ describe('work to lose', () => {
       await expect(guardWorkToLose(dir, 'recreating', dir)).resolves.toStrictEqual(expected);
       const listings = readLog(log).filter(call => call.includes(' ls-files '));
       expect(listings.every(call => call.includes(' --directory'))).toBeTruthy();
-      expect(listings).toHaveLength(2);
+      // Two guards, each with two inspections.
+      expect(listings).toHaveLength(4);
     });
 
     it('reports each nested submodule hard-to-rebuild file once without listing rebuildable directories', async () => {
@@ -325,7 +326,7 @@ describe('work to lose', () => {
       await expect(guardWorkToLose(dir, 'recreating', dir)).resolves.toStrictEqual(expected);
       const listings = readLog(log).filter(call => call.includes(`${inner} ls-files `));
       expect(listings.every(call => call.includes(' --directory'))).toBeTruthy();
-      expect(listings).toHaveLength(2);
+      expect(listings).toHaveLength(4);
     });
 
     it.each(['GIT_LITERAL_PATHSPECS', 'GIT_GLOB_PATHSPECS', 'GIT_NOGLOB_PATHSPECS', 'GIT_ICASE_PATHSPECS'])('protects ignored directories independently of %s', async variable => {
@@ -342,7 +343,7 @@ describe('work to lose', () => {
         code: 'dirty_worktree',
         extra: { changes: [], files: ['!! local/settings.env'], hardToRebuild: ['local/settings.env'] },
       });
-      expect(readLog(log)).toStrictEqual(['0 0 0 0', '0 0 0 0']);
+      expect(readLog(log)).toStrictEqual(['0 0 0 0', '0 0 0 0', '0 0 0 0', '0 0 0 0']);
     });
 
     it('keeps work to lose when a listed ignored directory disappears before it can be read', async () => {

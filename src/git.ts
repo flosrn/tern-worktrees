@@ -427,7 +427,7 @@ export const unpushedCommits = async (dir: string, retained: string | null): Pro
 
 const ignoredOutput = async (dir: string, args: string[]): Promise<string> => {
   const output = await run(['git', '-C', dir, ...args], {
-    env: { GIT_GLOB_PATHSPECS: '0', GIT_ICASE_PATHSPECS: '0', GIT_LITERAL_PATHSPECS: '0', GIT_NOGLOB_PATHSPECS: '0' },
+    env: { GIT_ADVICE: '0', GIT_GLOB_PATHSPECS: '0', GIT_ICASE_PATHSPECS: '0', GIT_LITERAL_PATHSPECS: '0', GIT_NOGLOB_PATHSPECS: '0' },
     strictUtf8: true,
   });
   if (output.status !== 0 || output.stderr !== '') {
@@ -445,6 +445,13 @@ const inspectedDirectory = (directory: string, expected?: Pick<Stats, 'dev' | 'i
     throw new Error('The ignored directory changed identity during inspection');
   }
   return stat;
+};
+
+/** Appends each of `items` to `target` with a loop. A spread into one call overflows the stack with a large number of items. */
+const pushAll = (target: string[], items: string[]): void => {
+  for (const item of items) {
+    target.push(item);
+  }
 };
 
 const readIgnoredDirectory = (dir: string, relative: string, pruned: readonly string[], expected?: { dev: number; ino: number }): string[] => {
@@ -465,7 +472,7 @@ const readIgnoredDirectory = (dir: string, relative: string, pruned: readonly st
       const stat = lstatSync(path.join(dir, relative, name));
       if (stat.isDirectory()) {
         if (!pruned.includes(name)) {
-          files.push(...readIgnoredDirectory(dir, `${relative}${name}/`, pruned, stat));
+          pushAll(files, readIgnoredDirectory(dir, `${relative}${name}/`, pruned, stat));
         }
       } else if (stat.isFile() || stat.isSymbolicLink()) {
         files.push(`${relative}${name}`);
@@ -478,13 +485,25 @@ const readIgnoredDirectory = (dir: string, relative: string, pruned: readonly st
   }
 };
 
-/** The ignored files with `pruned` directory segments omitted, once each, relative to `dir`. It does not look into submodules. */
+/**
+ * The ignored files with `pruned` directory segments omitted, once each, relative to `dir`. It does not look into submodules. A file in a
+ * directory that is read comes from the read alone. Git can also list it with a different normalization, for example NFC for an NFD name on macOS.
+ */
 export const ignoredFiles = async (dir: string, pruned: readonly string[]): Promise<string[]> => {
   const args = ['ls-files', '-z', '--others', '--ignored', '--exclude-standard'];
   const output = await ignoredOutput(dir, [...args, '--directory']);
   const entries = output.split('\0').filter(file => file !== '');
   const directories = entries.filter(file => file.endsWith('/') && !file.split('/').some(segment => pruned.includes(segment)));
-  const files = entries.filter(file => !file.endsWith('/'));
+  const read = new Set(directories);
+  const underRead = (file: string): boolean => {
+    for (let end = file.indexOf('/'); end !== -1; end = file.indexOf('/', end + 1)) {
+      if (read.has(file.slice(0, end + 1))) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const files = entries.filter(file => !file.endsWith('/') && !underRead(file));
   for (const file of files) {
     try {
       const stat = lstatSync(path.join(dir, file));
@@ -496,7 +515,7 @@ export const ignoredFiles = async (dir: string, pruned: readonly string[]): Prom
     }
   }
   for (const directory of directories) {
-    files.push(...readIgnoredDirectory(dir, directory, pruned));
+    pushAll(files, readIgnoredDirectory(dir, directory, pruned));
   }
   return [...new Set(files)].toSorted();
 };

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vite-plus/test';
 import type { FinishPlan } from '../src/finish-types.ts';
 import { must } from '../src/proc.ts';
-import { git, gitShim, ignoreGlobally, managedPath, spawnCli, tempDir, tmpRepo, useSandbox, writeTernLs } from './helpers.ts';
+import { afterGitListing, git, gitShim, ignoreGlobally, managedPath, spawnCli, tempDir, tmpRepo, useSandbox, writeTernLs } from './helpers.ts';
 
 const fixture = async () => {
   const repo = await tmpRepo('runtime');
@@ -37,7 +37,7 @@ describe('ignored-file safety through the real Bun CLI', () => {
     expect(existsSync(target)).toBeTruthy();
   });
 
-  it('reads a symbolic link and nested repository without a second Git expansion', async () => {
+  it('reads a symbolic link and nested repository in a collapsed ignored directory', async () => {
     const { dir, target } = await fixture();
     await ignoreGlobally('local/');
     const nested = path.join(target, 'local', 'nested');
@@ -46,7 +46,6 @@ describe('ignored-file safety through the real Bun CLI', () => {
     writeFileSync(path.join(nested, 'private.env'), 'local settings\n');
     writeFileSync(path.join(target, 'local', '00.tsbuildinfo'), 'generated\n');
     symlinkSync('missing', path.join(target, 'local', 'link'));
-    await gitShim(`if [ "$3" = ls-files ] && [ "$8" = -- ]; then printf 'local/00.tsbuildinfo\\0'; exit 0; fi`);
     const result = plan(dir, target);
     expect(result.candidates).toStrictEqual([]);
     expect(result.keep).toMatchObject([{ code: 'dirty_worktree', path: target }]);
@@ -124,5 +123,58 @@ fi`);
     expect(result.candidates).toStrictEqual([]);
     expect(result.keep).toMatchObject([{ code: 'dirty_worktree', path: target }]);
     expect(existsSync(path.join(file, 'private.env'))).toBeTruthy();
+  });
+
+  it.each([1, 2])('keeps a collapsed directory replaced with an empty directory after real Git listing %i', async listing => {
+    const { dir, target } = await fixture();
+    await ignoreGlobally('*');
+    const local = path.join(target, 'local');
+    const saved = path.join(target, 'saved-local');
+    mkdirSync(local);
+    writeFileSync(path.join(local, 'private.env'), 'local settings\n');
+    await afterGitListing(listing, `mv '${local}' '${saved}'; mkdir '${local}'`);
+    const result = plan(dir, target);
+    expect(result.candidates).toStrictEqual([]);
+    expect(result.keep).toMatchObject([{ code: 'dirty_worktree', path: target }]);
+    expect(existsSync(path.join(saved, 'private.env'))).toBeTruthy();
+  });
+
+  it.each([1, 2])('keeps the parent of a listed ignored directory replaced with a symbolic link after real Git listing %i', async listing => {
+    const { dir, target } = await fixture();
+    mkdirSync(path.join(target, 'pkg', 'state'), { recursive: true });
+    writeFileSync(path.join(target, 'pkg', 'tracked.txt'), 'tracked\n');
+    await git(target, 'add', 'pkg/tracked.txt');
+    await git(target, 'commit', '--quiet', '-m', 'pkg');
+    writeFileSync(path.join(target, 'pkg', 'state', 'private.env'), 'local settings\n');
+    await ignoreGlobally('*');
+    const decoy = tempDir('decoy-pkg');
+    mkdirSync(path.join(decoy, 'state'));
+    writeFileSync(path.join(decoy, 'tracked.txt'), 'tracked\n');
+    const pkg = path.join(target, 'pkg');
+    const saved = path.join(target, 'saved-pkg');
+    await afterGitListing(listing, `mv '${pkg}' '${saved}'; ln -s '${decoy}' '${pkg}'`);
+    const result = plan(dir, target);
+    expect(result.candidates).toStrictEqual([]);
+    expect(result.keep).toMatchObject([{ code: 'dirty_worktree', path: target }]);
+    expect(existsSync(path.join(saved, 'state', 'private.env'))).toBeTruthy();
+  });
+
+  it('does not refuse a clean sparse worktree for the advice Git prints while it expands the index', async () => {
+    const repo = await tmpRepo('sparse');
+    mkdirSync(path.join(repo.dir, 'kept'));
+    mkdirSync(path.join(repo.dir, 'outside'));
+    writeFileSync(path.join(repo.dir, 'kept', 'file.txt'), 'kept\n');
+    writeFileSync(path.join(repo.dir, 'outside', 'file.txt'), 'outside\n');
+    await git(repo.dir, 'add', 'kept', 'outside');
+    await git(repo.dir, 'commit', '--quiet', '-m', 'sparse');
+    const target = managedPath('delivered', 'sparse');
+    await git(repo.dir, 'worktree', 'add', '--quiet', '-b', 'delivered', target);
+    await git(target, 'sparse-checkout', 'set', '--cone', '--sparse-index', 'kept');
+    await ignoreGlobally('node_modules/');
+    mkdirSync(path.join(target, 'outside', 'node_modules', 'package'), { recursive: true });
+    writeFileSync(path.join(target, 'outside', 'node_modules', 'package', 'index.js'), 'installed\n');
+    const result = plan(repo.dir, target);
+    // The guard passed: the branch has no merge proof, so the plan keeps it only for that.
+    expect(result.keep).toStrictEqual([{ code: 'not_merged', path: target }]);
   });
 });

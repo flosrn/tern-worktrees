@@ -6,7 +6,7 @@ import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { guardWorkToLose } from '../src/work-to-lose.ts';
 import { must } from '../src/proc.ts';
-import { git, gitShim, ignoreGlobally, tempDir, tmpRepo, useSandbox } from './helpers.ts';
+import { afterGitListing, git, gitShim, ignoreGlobally, tempDir, tmpRepo, useSandbox } from './helpers.ts';
 
 const writeFiles = (dir: string, files: Record<string, string>): void => {
   for (const [file, content] of Object.entries(files)) {
@@ -52,11 +52,10 @@ describe('work-to-lose inspection failures', () => {
     }
   });
 
-  it('reads every ignored file without relying on a second Git expansion', async () => {
+  it('reads every ignored file of a collapsed ignored directory', async () => {
     const { dir } = await tmpRepo();
     await ignoreGlobally('local/');
     writeFiles(dir, { 'local/00.tsbuildinfo': 'generated\n', 'local/secrets/private.env': 'local settings\n' });
-    await gitShim(`if [ "$3" = ls-files ] && [ "$8" = -- ]; then printf 'local/00.tsbuildinfo\\0'; exit 0; fi`);
     await expect(guardWorkToLose(dir, 'recreating', dir)).resolves.toStrictEqual(['local/secrets/private.env']);
     await expect(guardWorkToLose(dir, { removing: tempDir('main') }, dir)).rejects.toMatchObject({
       code: 'dirty_worktree',
@@ -73,6 +72,15 @@ describe('work-to-lose inspection failures', () => {
       code: 'dirty_worktree',
       extra: { files: ['!! local-�/private.env'], hardToRebuild: ['local-�/private.env'] },
     });
+  });
+
+  it('reports once an ignored file whose stored name is decomposed', async () => {
+    const { dir } = await tmpRepo();
+    await ignoreGlobally('*.env');
+    const decomposed = 're\u0301sume\u0301.env';
+    writeFiles(dir, { [`conf/${decomposed}`]: 'local settings\n' });
+    const carried = await guardWorkToLose(dir, 'recreating', dir);
+    expect(carried.map(file => file.normalize('NFC'))).toStrictEqual(['conf/r\u00E9sum\u00E9.env']);
   });
 
   it('keeps nested repositories and symbolic links as single ignored entries', async () => {
@@ -165,6 +173,18 @@ describe('work-to-lose inspection failures', () => {
 describe('directory identity races', () => {
   beforeEach(() => {
     useSandbox();
+  });
+
+  it.each(['recreating', 'removing'])('refuses ignored files that change between the two inspections while %s', async operation => {
+    const { dir } = await tmpRepo();
+    await ignoreGlobally('*');
+    writeFiles(dir, { 'local/private.env': 'local settings\n' });
+    const local = path.join(dir, 'local');
+    await afterGitListing(2, `mv '${local}' '${path.join(dir, 'saved-local')}'; mkdir '${local}'`);
+    const failure = guardWorkToLose(dir, operation === 'recreating' ? 'recreating' : { removing: tempDir('main') }, dir);
+    await expect(failure).rejects.toThrow(/changed while its ignored files were inspected/u);
+    await expect(failure).rejects.toMatchObject({ code: 'dirty_worktree' });
+    await expect(failure).rejects.toHaveProperty('extra', { existing: dir });
   });
 
   it.each(['local', 'local/nested'])('refuses a directory replaced during direct reading at %s', async relative => {
