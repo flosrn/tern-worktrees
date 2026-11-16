@@ -423,8 +423,22 @@ export const unpushedCommits = async (dir: string, retained: string | null): Pro
   return lines(await gitMust(dir, 'rev-list', '--abbrev-commit', 'HEAD', '--branches', '--not', '--remotes', ...(kept ? [retained] : [])));
 };
 
-/** The ignored files of the worktree at `dir`, one entry for each file, as paths relative to `dir`. It does not look into submodules. */
-export const ignoredFiles = async (dir: string): Promise<string[]> => {
-  const output = await gitMust(dir, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard');
-  return output.split('\0').filter(file => file !== '');
+/** The ignored files with `pruned` directory segments omitted, once each, relative to `dir`. It does not look into submodules. */
+export const ignoredFiles = async (dir: string, pruned: readonly string[]): Promise<string[]> => {
+  const args = ['ls-files', '-z', '--others', '--ignored', '--exclude-standard'];
+  const options = { env: { GIT_GLOB_PATHSPECS: '0', GIT_ICASE_PATHSPECS: '0', GIT_LITERAL_PATHSPECS: '0', GIT_NOGLOB_PATHSPECS: '0' } };
+  const output = await must(['git', '-C', dir, ...args, '--directory', '--no-empty-directory'], 'git_failed', options);
+  const entries = output.split('\0').filter(file => file !== '');
+  const directories = entries.filter(file => file.endsWith('/') && !file.split('/').some(segment => pruned.includes(segment)));
+  const files = entries.filter(file => !file.endsWith('/'));
+  if (directories.length > 0) {
+    const expanded = await must(['git', '-C', dir, ...args, '--', ...directories.map(directory => `:(literal)${directory}`)], 'dirty_worktree', options);
+    const listed = expanded.split('\0').filter(file => file !== '');
+    const missing = directories.filter(directory => !listed.some(file => file.startsWith(directory)));
+    if (missing.length > 0) {
+      throw new CliError('dirty_worktree', `Ignored directories could not be inspected in ${dir}`, { existing: dir, files: missing.map(directory => `!! ${directory}`) });
+    }
+    files.push(...listed);
+  }
+  return [...new Set(files)].toSorted();
 };

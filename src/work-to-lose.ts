@@ -104,10 +104,10 @@ const changesIn = async (dir: string, subs: string[], main: string): Promise<str
 /** The ignored files of the worktree at `dir` and of each submodule in `subs` that are hard to rebuild, as paths relative to `dir`. */
 const hardToRebuildIn = async (dir: string, subs: string[]): Promise<string[]> => {
   const ignoredIn = async (sub: string): Promise<string[]> => {
-    const files = await ignoredFiles(path.join(dir, sub));
+    const files = await ignoredFiles(path.join(dir, sub), REBUILDABLE);
     return files.map(file => `${sub}/${file}`);
   };
-  const [own, nested] = await Promise.all([ignoredFiles(dir), Promise.all(subs.map(ignoredIn))]);
+  const [own, nested] = await Promise.all([ignoredFiles(dir, REBUILDABLE), Promise.all(subs.map(ignoredIn))]);
   return [...own, ...nested.flat()].filter(file => !file.endsWith('.tsbuildinfo') && !file.split('/').some(segment => REBUILDABLE.includes(segment)));
 };
 
