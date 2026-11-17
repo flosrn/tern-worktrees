@@ -28,7 +28,7 @@ describe('ignored-file safety through the real Bun CLI', () => {
 
   it('keeps an invalid-byte directory and valid replacement-character sibling', async () => {
     const { dir, target } = await fixture();
-    await gitShim(`if [ "$3" = ls-files ]; then printf 'local-\\377/\\0local-\\357\\277\\275/\\0'; exit 0; fi`);
+    await gitShim(`if [ "$3 $5" = 'ls-files --others' ]; then printf 'local-\\377/\\0local-\\357\\277\\275/\\0'; exit 0; fi`);
     const result = plan(dir, target);
     expect(result.candidates).toStrictEqual([]);
     expect(result.keep).toHaveLength(1);
@@ -59,7 +59,7 @@ describe('ignored-file safety through the real Bun CLI', () => {
     mkdirSync(secrets, { recursive: true });
     writeFileSync(path.join(secrets, 'private.env'), 'local settings\n');
     writeFileSync(path.join(target, 'local', '00.tsbuildinfo'), 'generated\n');
-    await gitShim(`if [ "$3" = ls-files ]; then chmod 000 '${secrets}'; printf 'local/\\0'; exit 0; fi`);
+    await gitShim(`if [ "$3 $5" = 'ls-files --others' ]; then chmod 000 '${secrets}'; printf 'local/\\0'; exit 0; fi`);
     try {
       const result = plan(dir, target);
       expect(result.candidates).toStrictEqual([]);
@@ -73,7 +73,7 @@ describe('ignored-file safety through the real Bun CLI', () => {
 
   it('keeps a partial Git result even when the warning has exit status zero', async () => {
     const { dir, target } = await fixture();
-    await gitShim(`if [ "$3" = ls-files ]; then printf 'local/00.tsbuildinfo\\0'; echo 'warning: could not open local/secrets/: Permission denied' >&2; exit 0; fi`);
+    await gitShim(`if [ "$3 $5" = 'ls-files --others' ]; then printf 'local/00.tsbuildinfo\\0'; echo 'warning: could not open local/secrets/: Permission denied' >&2; exit 0; fi`);
     const result = plan(dir, target);
     expect(result.candidates).toStrictEqual([]);
     expect(result.keep).toMatchObject([{ code: 'dirty_worktree', path: target }]);
@@ -91,7 +91,7 @@ describe('ignored-file safety through the real Bun CLI', () => {
     writeFileSync(path.join(local, 'private.env'), 'local settings\n');
     const gitPath = await must(['sh', '-c', 'command -v git'], 'git_failed');
     const realGit = gitPath.trim();
-    await gitShim(`if [ "$3" = ls-files ]; then
+    await gitShim(`if [ "$3 $5" = 'ls-files --others' ]; then
   '${realGit}' "$@"
   status=$?
   mv '${local}' '${saved}'
@@ -111,7 +111,7 @@ fi`);
     writeFileSync(file, 'generated\n');
     const gitPath = await must(['sh', '-c', 'command -v git'], 'git_failed');
     const realGit = gitPath.trim();
-    await gitShim(`if [ "$3" = ls-files ]; then
+    await gitShim(`if [ "$3 $5" = 'ls-files --others' ]; then
   '${realGit}' "$@"
   status=$?
   mv '${file}' '${target}/saved.tsbuildinfo'

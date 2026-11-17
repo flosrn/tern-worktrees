@@ -409,6 +409,13 @@ export const updateSubmodules = async (root: string, dir: string): Promise<strin
 /** The paths of the initialized submodules of the worktree at `dir`, at each depth, relative to `dir`. A submodule comes before the submodules in it. */
 export const submodules = async (dir: string): Promise<string[]> => lines(await gitMust(dir, 'submodule', 'foreach', '--quiet', '--recursive', 'printf "%s\\n" "$displaypath"'));
 
+/** The paths of the submodule entries (mode `160000`) in the index of the checkout at `dir`, once each, relative to `dir`. */
+export const gitlinks = async (dir: string): Promise<string[]> => {
+  const output = await gitMust(dir, 'ls-files', '-z', '--stage');
+  const entries = output.split('\0');
+  return [...new Set(entries.filter(entry => entry.startsWith('160000 ')).map(entry => entry.slice(entry.indexOf('\t') + 1)))];
+};
+
 /** The commit recorded for `sub` at `revision` that is also in the object store of the submodule, or null. */
 export const recordedSubmoduleCommit = async (dir: string, revision: string, sub: string): Promise<string | null> => {
   const result = await gitRun(dir, 'ls-tree', '--format=%(objectname)', revision, '--', sub);
@@ -439,10 +446,10 @@ const ignoredOutput = async (dir: string, args: string[]): Promise<string> => {
 const inspectedDirectory = (directory: string, expected?: Pick<Stats, 'dev' | 'ino'>): Stats => {
   const stat = lstatSync(directory);
   if (!stat.isDirectory()) {
-    throw new Error('The ignored directory changed type before inspection');
+    throw new Error('The directory changed type before inspection');
   }
   if (expected !== undefined && (stat.dev !== expected.dev || stat.ino !== expected.ino)) {
-    throw new Error('The ignored directory changed identity during inspection');
+    throw new Error('The directory changed identity during inspection');
   }
   return stat;
 };
@@ -454,7 +461,8 @@ const pushAll = (target: string[], items: string[]): void => {
   }
 };
 
-const readIgnoredDirectory = (dir: string, relative: string, pruned: readonly string[], expected?: { dev: number; ino: number }): string[] => {
+/** The files in `relative`, a directory of `dir` that ends with `/`, at each depth. A failure names the directory as `kind`. */
+const readDirectory = (dir: string, relative: string, pruned: readonly string[], kind: string, expected?: { dev: number; ino: number }): string[] => {
   try {
     const directory = path.join(dir, relative.slice(0, -1));
     const before = inspectedDirectory(directory, expected);
@@ -472,7 +480,7 @@ const readIgnoredDirectory = (dir: string, relative: string, pruned: readonly st
       const stat = lstatSync(path.join(dir, relative, name));
       if (stat.isDirectory()) {
         if (!pruned.includes(name)) {
-          pushAll(files, readIgnoredDirectory(dir, `${relative}${name}/`, pruned, stat));
+          pushAll(files, readDirectory(dir, `${relative}${name}/`, pruned, kind, stat));
         }
       } else if (stat.isFile() || stat.isSymbolicLink()) {
         files.push(`${relative}${name}`);
@@ -481,9 +489,16 @@ const readIgnoredDirectory = (dir: string, relative: string, pruned: readonly st
     inspectedDirectory(directory, before);
     return files;
   } catch (error) {
-    throw new CliError('dirty_worktree', `Ignored directory ${relative} could not be read: ${String(error)}`, { existing: dir });
+    throw new CliError('dirty_worktree', `${kind} ${relative} could not be read: ${String(error)}`, { existing: dir });
   }
 };
+
+/**
+ * The files in the directory `relative` of `dir`, at each depth, sorted, relative to `dir`. It does not follow symbolic links: a symbolic
+ * link is one file. A directory that holds `.git` is one entry. A missing path, or a path that is not a directory, gives none.
+ */
+export const filesUnder = (dir: string, relative: string): string[] =>
+  lstatSync(path.join(dir, relative), { throwIfNoEntry: false })?.isDirectory() === true ? readDirectory(dir, `${relative}/`, [], 'Directory').toSorted() : [];
 
 /**
  * The ignored files with `pruned` directory segments omitted, once each, relative to `dir`. It does not look into submodules. A file in a
@@ -515,7 +530,7 @@ export const ignoredFiles = async (dir: string, pruned: readonly string[]): Prom
     }
   }
   for (const directory of directories) {
-    pushAll(files, readIgnoredDirectory(dir, directory, pruned));
+    pushAll(files, readDirectory(dir, directory, pruned, 'Ignored directory'));
   }
   return [...new Set(files)].toSorted();
 };

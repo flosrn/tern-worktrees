@@ -22,7 +22,7 @@ describe('work-to-lose inspection failures', () => {
 
   it.each(['recreating', 'removing'])('keeps work to lose when ignored names cannot be decoded without loss while %s', async operation => {
     const { dir } = await tmpRepo();
-    await gitShim(`if [ "$3" = ls-files ]; then printf 'local-\\377/\\0local-\\357\\277\\275/\\0'; exit 0; fi`);
+    await gitShim(`if [ "$3 $5" = 'ls-files --others' ]; then printf 'local-\\377/\\0local-\\357\\277\\275/\\0'; exit 0; fi`);
     const failure = guardWorkToLose(dir, operation === 'recreating' ? 'recreating' : { removing: tempDir('main') }, dir);
     await expect(failure).rejects.toMatchObject({ code: 'dirty_worktree' });
     await expect(failure).rejects.toThrow(/path name.*UTF-8/u);
@@ -32,7 +32,7 @@ describe('work-to-lose inspection failures', () => {
     const { dir } = await tmpRepo();
     await ignoreGlobally('local/');
     writeFiles(dir, { 'local/00.tsbuildinfo': 'generated\n', 'local/secrets/private.env': 'local settings\n' });
-    await gitShim(`if [ "$3" = ls-files ]; then printf 'local/00.tsbuildinfo\\0'; echo 'warning: could not open local/secrets/: Permission denied' >&2; exit 0; fi`);
+    await gitShim(`if [ "$3 $5" = 'ls-files --others' ]; then printf 'local/00.tsbuildinfo\\0'; echo 'warning: could not open local/secrets/: Permission denied' >&2; exit 0; fi`);
     const failure = guardWorkToLose(dir, operation === 'recreating' ? 'recreating' : { removing: tempDir('main') }, dir);
     await expect(failure).rejects.toMatchObject({ code: 'dirty_worktree' });
     await expect(failure).rejects.toThrow(/Permission denied/u);
@@ -43,7 +43,7 @@ describe('work-to-lose inspection failures', () => {
     await ignoreGlobally('local/');
     writeFiles(dir, { 'local/00.tsbuildinfo': 'generated\n', 'local/secrets/private.env': 'local settings\n' });
     const secrets = path.join(dir, 'local', 'secrets');
-    await gitShim(`if [ "$3" = ls-files ]; then chmod 000 '${secrets}'; printf 'local/\\0'; exit 0; fi`);
+    await gitShim(`if [ "$3 $5" = 'ls-files --others' ]; then chmod 000 '${secrets}'; printf 'local/\\0'; exit 0; fi`);
     try {
       await expect(guardWorkToLose(dir, 'recreating', dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
       await expect(guardWorkToLose(dir, { removing: tempDir('main') }, dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
@@ -143,7 +143,7 @@ describe('work-to-lose inspection failures', () => {
 
   it('reports the failed ignored listing status when Git has no diagnostic', async () => {
     const { dir } = await tmpRepo();
-    await gitShim(`if [ "$3" = ls-files ]; then exit 7; fi`);
+    await gitShim(`if [ "$3 $5" = 'ls-files --others' ]; then exit 7; fi`);
     const failure = guardWorkToLose(dir, 'recreating', dir);
     await expect(failure).rejects.toMatchObject({ code: 'dirty_worktree' });
     await expect(failure).rejects.toThrow(/inspection exited 7/u);
@@ -315,7 +315,7 @@ describe('directory identity races', () => {
     if (kind === 'directory') {
       mkdirSync(path.join(dir, 'local.tsbuildinfo'));
     }
-    await gitShim(`if [ "$3" = ls-files ]; then printf 'local.tsbuildinfo\\0'; exit 0; fi`);
+    await gitShim(`if [ "$3 $5" = 'ls-files --others' ]; then printf 'local.tsbuildinfo\\0'; exit 0; fi`);
     const failure = guardWorkToLose(dir, 'recreating', dir);
     await expect(failure).rejects.toMatchObject({ code: 'dirty_worktree' });
     await expect(failure).rejects.toThrow(/could not be inspected/u);
