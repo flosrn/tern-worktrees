@@ -31,6 +31,9 @@ export default defineConfig({
         statements: 100,
       },
     },
+    // Local runs share a Mac with other agents. CI keeps the Vitest default.
+    // VITEST_MAX_WORKERS and --maxWorkers still override this value.
+    maxWorkers: envSet('GITHUB_ACTIONS') ? undefined : 6,
     projects: [
       {
         extends: true,
