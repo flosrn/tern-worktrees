@@ -3,6 +3,7 @@ import { closeSync, existsSync, lstatSync, openSync, realpathSync, writeFileSync
 import path from 'node:path';
 import timers from 'node:timers/promises';
 import { run as remove } from './commands/remove.ts';
+import { keptFor } from './finish-kept.ts';
 import { finishActivity, callerStillRunning } from './finish-processes.ts';
 import { mergedProof } from './finish-proof.ts';
 import { finishDirectory, lockFinish, readFinish, writeFinish } from './finish-store.ts';
@@ -201,7 +202,7 @@ const validateTarget = async (state: StoredFinish, candidate: FinishCandidate): 
     }
     return cause;
   } catch (error) {
-    return { code: error instanceof CliError ? error.code : 'inspection_failed', detail: error instanceof Error ? error.message : String(error), path: target };
+    return keptFor(target, error instanceof Error ? error : String(error), 'inspection_failed');
   }
 };
 
@@ -248,7 +249,7 @@ const executeTarget = async (state: StoredFinish, candidate: FinishCandidate, wa
     state.removed.push({ branchDeleted: result.branchDeleted, closedBlocks: result.closedBlocks, path: target });
     state.warnings.push(...result.warnings);
   } catch (error) {
-    state.errors.push({ code: error instanceof CliError ? error.code : 'teardown_failed', detail: error instanceof Error ? error.message : String(error), path: target });
+    state.errors.push(keptFor(target, error instanceof Error ? error : String(error), 'teardown_failed'));
   }
   state.inFlight = null;
   writeFinish(state);

@@ -164,7 +164,7 @@ Preserve the main checkout, non-managed worktrees, paths identified to stay, blo
 
 #### Finish causes
 
-Each `keep` or `errors` entry has the form `{"path": "/canonical/worktree", "code": "path_identity_changed"}`, with an optional `detail` string. `code` is the stable public value for automation. `detail` carries an external exception message when available, for inspection rather than matching. Internal decisions carry no explanatory prose in `detail`. These entries have no `reason` field.
+Each `keep` or `errors` entry has the form `{"path": "/canonical/worktree", "code": "path_identity_changed"}`, with an optional `detail` string. `code` is the stable public value for automation. `detail` carries an external exception message when available, for inspection rather than matching. For `dirty_worktree`, it names a maximum of 10 files that keep the worktree, hard-to-rebuild `!! <path>` entries first, so the user can remove them or declare them `rebuildable` and finish again. Internal decisions carry no explanatory prose in `detail`. These entries have no `reason` field.
 
 | Code                    | Cause                                                                   |
 | ----------------------- | ----------------------------------------------------------------------- |

@@ -9,6 +9,7 @@ import { worktreeOwner, worktreeRoot } from './paths.ts';
 import type { WorktreeRoot } from './paths.ts';
 import { CliError } from './proc.ts';
 import type { FinishKept, FinishPlan } from './finish-types.ts';
+import { keptFor } from './finish-kept.ts';
 import { guardWorkToLose } from './work-to-lose.ts';
 import { mergedProof } from './finish-proof.ts';
 import { finishActivity } from './finish-processes.ts';
@@ -40,12 +41,6 @@ const activityCause = (target: string, activity: FinishActivity): FinishKept | n
   }
   return cause;
 };
-
-const inspectionFailure = (target: string, error: Error | string): FinishKept => ({
-  code: error instanceof CliError ? error.code : 'inspection_failed',
-  detail: error instanceof Error ? error.message : error,
-  path: target,
-});
 
 const planCandidate = async (state: StoredFinish, entry: Worktree, root: WorktreeRoot, github: string | null): Promise<void> => {
   try {
@@ -80,7 +75,7 @@ const planCandidate = async (state: StoredFinish, entry: Worktree, root: Worktre
     state.candidates.push({ branch: entry.branch, head: entry.head, path: entry.path, pr: proof });
     state.identities[entry.path] = { dev: stat.dev, ino: stat.ino };
   } catch (error) {
-    state.keep.push(inspectionFailure(entry.path, error instanceof Error ? error : String(error)));
+    state.keep.push(keptFor(entry.path, error instanceof Error ? error : String(error), 'inspection_failed'));
   }
 };
 
