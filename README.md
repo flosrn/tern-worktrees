@@ -119,7 +119,7 @@ When git refuses the move, `tern-wt` makes the worktree again in the root with p
 
 The submodule check is local: it trusts the commits recorded in `HEAD` of the main checkout, and their ancestors, also for nested submodules, only when the two submodule object stores have the recorded commit: the main checkout and the worktree. Otherwise, only remote branches protect the commits. A release tag need not be fetched. A local tag alone does not protect a commit. A submodule commit recorded only in the worktree being removed or relocated does not protect it.
 
-When an index path cannot be decoded as UTF-8 without loss, the inspection stops with `git_failed` and keeps the worktree.
+When a submodule path in the index cannot be decoded as UTF-8 without loss, the inspection stops with `git_failed` and keeps the worktree. The names of other tracked files do not stop it.
 
 An omp-owned worktree of the branch needs no relocation: `tern-wt` opens its tab where it is.
 

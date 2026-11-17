@@ -1,15 +1,16 @@
 import { chmodSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vite-plus/test';
-import { gitRun } from '../src/git.ts';
+import { filesUnder, gitRun } from '../src/git.ts';
+import { must } from '../src/proc.ts';
 import { guardWorkToLose } from '../src/work-to-lose.ts';
 import { git, gitShim, ignoreGlobally, rejection, tempDir, tmpRepo, useSandbox, writeFiles } from './helpers.ts';
 
-/** A main checkout with the submodule `vendor`, and a linked worktree where `vendor` is not initialized. */
-const uninitializedSubmodule = async (): Promise<{ checkout: string; main: string }> => {
+/** A main checkout with the submodule at `sub`, and a linked worktree where it is not initialized. */
+const uninitializedSubmodule = async (sub = 'vendor'): Promise<{ checkout: string; main: string }> => {
   const vendor = await tmpRepo('vendor');
   const repo = await tmpRepo();
-  await git(repo.dir, '-c', 'protocol.file.allow=always', 'submodule', '--quiet', 'add', vendor.origin, 'vendor');
+  await git(repo.dir, '-c', 'protocol.file.allow=always', 'submodule', '--quiet', 'add', vendor.origin, sub);
   await git(repo.dir, 'commit', '--quiet', '-m', 'add vendor');
   const checkout = tempDir('feature');
   await git(repo.dir, 'worktree', 'add', '--quiet', '--detach', checkout);
@@ -48,6 +49,22 @@ describe('work to lose in submodule paths that are not initialized', () => {
         await expect(failure).rejects.toThrow(/path name.*UTF-8/u);
       }),
     );
+  });
+
+  it('reads gitlinks when a tracked file that is not a submodule has a name that is not UTF-8', async () => {
+    const { checkout, main } = await uninitializedSubmodule();
+    // APFS refuses the name, so the sparse checkout of the worktree does not hold it.
+    await must(['sh', '-c', `blob=$(echo hi | git hash-object -w --stdin) && git update-index --add --cacheinfo "100644,$blob,docs/caf$(printf '\\351').txt"`], 'git_failed', {
+      cwd: main,
+    });
+    await git(main, 'commit', '--quiet', '-m', 'latin-1 name');
+    await git(checkout, 'sparse-checkout', 'set', '--no-cone', '/*', '!/docs/');
+    await git(checkout, 'checkout', '--quiet', '--detach', 'main');
+    await expect(guardWorkToLose(checkout, 'recreating', main)).resolves.toStrictEqual([]);
+    await expect(guardWorkToLose(checkout, { removing: main }, main)).resolves.toStrictEqual([]);
+    writeFiles(checkout, { 'vendor/notes.md': 'notes\n' });
+    const error = await rejection(guardWorkToLose(checkout, { removing: main }, main));
+    expect(error.extra).toStrictEqual({ changes: [], existing: checkout, files: ['!! vendor/notes.md'], hardToRebuild: ['vendor/notes.md'] });
   });
 
   it('stops teardown on each file in a submodule path that is not initialized', async () => {
@@ -92,6 +109,26 @@ describe('work to lose in submodule paths that are not initialized', () => {
     const deleted = { changes: [' D vendor'], existing: checkout, files: [' D vendor'], hardToRebuild: [] };
     await expect(rejection(guardWorkToLose(checkout, 'recreating', main))).resolves.toMatchObject({ code: 'dirty_worktree', extra: deleted });
     await expect(rejection(guardWorkToLose(checkout, { removing: main }, main))).resolves.toMatchObject({ code: 'dirty_worktree', extra: deleted });
+  });
+
+  it('gives the status of a submodule path whose parent became a file, as for a missing path', async () => {
+    const { checkout, main } = await uninitializedSubmodule('lib/vendor');
+    rmSync(path.join(checkout, 'lib'), { recursive: true });
+    writeFiles(checkout, { lib: 'f\n' });
+    const lost = { changes: [' D lib/vendor', '?? lib'], existing: checkout, files: [' D lib/vendor', '?? lib'], hardToRebuild: [] };
+    await expect(rejection(guardWorkToLose(checkout, 'recreating', main))).resolves.toMatchObject({ code: 'dirty_worktree', extra: lost });
+    await expect(rejection(guardWorkToLose(checkout, { removing: main }, main))).resolves.toMatchObject({ code: 'dirty_worktree', extra: lost });
+  });
+
+  it('refuses with only the worktree when a submodule path that is not initialized cannot be examined', async () => {
+    const { checkout } = await uninitializedSubmodule('lib/vendor');
+    chmodSync(path.join(checkout, 'lib'), 0o000);
+    try {
+      expect(() => filesUnder(checkout, 'lib/vendor')).toThrow(expect.objectContaining({ code: 'dirty_worktree', extra: { existing: checkout } }));
+      expect(() => filesUnder(checkout, 'lib/vendor')).toThrow(/could not be read: .*EACCES/u);
+    } finally {
+      chmodSync(path.join(checkout, 'lib'), 0o755);
+    }
   });
 
   it('does not stop teardown on a file in a submodule path that is not initialized with the same bytes as the file in the main checkout', async () => {
