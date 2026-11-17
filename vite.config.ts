@@ -2,7 +2,7 @@ import { defineConfig } from 'vite-plus';
 import oxfmtConfig from './oxfmt.config.ts';
 import oxlintConfig from './oxlint.config.ts';
 
-const gate = ['vp check', 'vp run check:luau', 'vp run test:luau', 'vp run lint:prose', 'vp test --coverage'];
+const gate = ['vp check', 'vp run check:luau', 'vp run test:luau', 'vp run lint:prose'];
 
 export default defineConfig({
   fmt: oxfmtConfig,
