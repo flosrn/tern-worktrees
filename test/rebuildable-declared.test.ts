@@ -116,6 +116,27 @@ describe('declared rebuildable segments', () => {
       }
     });
 
+    it('does not list the ignored files of a submodule whose own path holds a declared segment', async () => {
+      const main = await nestedSubmodules();
+      await ignoreGlobally('private-cache/');
+      const dir = tempDir('feature');
+      await git(main, 'worktree', 'add', '--quiet', '--detach', dir);
+      await git(dir, '-c', 'protocol.file.allow=always', 'submodule', '--quiet', 'update', '--init', '--recursive');
+      writeFiles(main, { '.tern/worktree.json': JSON.stringify({ rebuildable: ['outer'] }) });
+      writeFiles(dir, { 'outer/inner/private-cache/generated.bin': 'x\n', 'outer/private-cache/generated.bin': 'x\n' });
+      const unreadable = [path.join(dir, 'outer', 'private-cache'), path.join(dir, 'outer', 'inner', 'private-cache')];
+      for (const directory of unreadable) {
+        chmodSync(directory, 0o000);
+      }
+      try {
+        await expect(guardWorkToLose(dir, { removing: main }, main)).resolves.toStrictEqual([]);
+      } finally {
+        for (const directory of unreadable) {
+          chmodSync(directory, 0o755);
+        }
+      }
+    });
+
     it('stops both operations when the main checkout declaration is invalid', async () => {
       const { dir, main } = await declaring(['logs/server.log']);
       for (const operation of ['recreating', { removing: main }] as const) {

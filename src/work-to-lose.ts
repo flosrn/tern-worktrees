@@ -104,15 +104,18 @@ const changesIn = async (dir: string, subs: string[], main: string): Promise<str
 
 /**
  * The ignored files of the worktree at `dir` and of each submodule in `subs` that are hard to rebuild, as paths relative to `dir`. A file is
- * rebuildable when a segment of its path is in `rebuildable`, or when its name ends in `.tsbuildinfo`.
+ * rebuildable when a segment of its path is in `rebuildable`, or when its name ends in `.tsbuildinfo`. The listing skips each submodule with
+ * such a segment in its own path, because all of its files are rebuildable.
  */
 const hardToRebuildIn = async (dir: string, subs: string[], rebuildable: readonly string[]): Promise<string[]> => {
+  const isRebuildable = (file: string): boolean => file.split('/').some(segment => rebuildable.includes(segment));
   const ignoredIn = async (sub: string): Promise<string[]> => {
     const files = await ignoredFiles(path.join(dir, sub), rebuildable);
     return files.map(file => `${sub}/${file}`);
   };
-  const [own, nested] = await Promise.all([ignoredFiles(dir, rebuildable), Promise.all(subs.map(ignoredIn))]);
-  return [...own, ...nested.flat()].filter(file => !file.endsWith('.tsbuildinfo') && !file.split('/').some(segment => rebuildable.includes(segment)));
+  const listed = subs.filter(sub => !isRebuildable(sub));
+  const [own, nested] = await Promise.all([ignoredFiles(dir, rebuildable), Promise.all(listed.map(ignoredIn))]);
+  return [...own, ...nested.flat()].filter(file => !file.endsWith('.tsbuildinfo') && !isRebuildable(file));
 };
 
 /**
