@@ -6,6 +6,7 @@ import { guardWorkToLose } from '../src/work-to-lose.ts';
 import { git, ignoreGlobally, nestedSubmodules, rejection, tempDir, tmpRepo, useSandbox, writeFiles, writeTernLs } from './helpers.ts';
 
 const INVALID_SEGMENTS = 'rebuildable: expected path segments without "/", other than "." and ".."';
+const THROUGH_LINK = 'expected a declaration that is not read through a symbolic link';
 
 /** A linked worktree of a new repository, and its main checkout whose `.tern/worktree.json` declares `rebuildable`. */
 const declaring = async (rebuildable: string[]): Promise<{ dir: string; main: string }> => {
@@ -76,9 +77,26 @@ describe('declared rebuildable segments', () => {
       const error = await rejection(guardWorkToLose(dir, { removing: main }, main));
       expect({ code: error.code, message: error.message }).toStrictEqual({
         code: 'worktree_config_invalid',
-        message: `${file}: rebuildable: expected a declaration in the main checkout`,
+        message: `${file}: rebuildable: ${THROUGH_LINK}`,
       });
       expect(existsSync(path.join(dir, 'server.log'))).toBeTruthy();
+    });
+
+    it('stops teardown when the main checkout declaration links to a worktree nested in the main checkout', async () => {
+      await ignoreGlobally('valuable.env', 'worktrees/');
+      const { dir: main } = await tmpRepo();
+      const dir = path.join(main, 'worktrees', 'feature');
+      await git(main, 'worktree', 'add', '--quiet', '--detach', dir);
+      writeFiles(dir, { '.tern/worktree.json': JSON.stringify({ rebuildable: ['valuable.env'] }) });
+      await git(dir, 'add', '.tern');
+      await git(dir, 'commit', '--quiet', '-m', 'declare valuable.env');
+      writeFiles(dir, { 'valuable.env': 'SECRET=1\n' });
+      const file = path.join(main, '.tern', 'worktree.json');
+      mkdirSync(path.dirname(file));
+      symlinkSync(path.join('..', 'worktrees', 'feature', '.tern', 'worktree.json'), file);
+      const error = await rejection(guardWorkToLose(dir, { removing: main }, main));
+      expect({ code: error.code, message: error.message }).toStrictEqual({ code: 'worktree_config_invalid', message: `${file}: rebuildable: ${THROUGH_LINK}` });
+      expect(existsSync(path.join(dir, 'valuable.env'))).toBeTruthy();
     });
 
     it('applies a declared segment inside submodules at each depth, without reading a declared directory', async () => {

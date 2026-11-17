@@ -1,5 +1,5 @@
 /* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof -- This module validates unknown JSON fields at the file boundary. */
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { isJsonObject, isString } from './json.ts';
 import { expandHome } from './paths.ts';
@@ -182,16 +182,16 @@ const readHeavy = (raw: RawWorktreeConfig, fail: Fail): WorktreeConfig['heavy'] 
 
 /**
  * The declared rebuildable path segments: each one names a whole segment, so it cannot be empty, hold `/`, or be `.` or `..`. A
- * declaration must resolve to a file in `root`: with a link to a different checkout, the branch of that checkout can select which files
- * teardown deletes.
+ * declaration must not be read through a symbolic link, for `.tern` or for the file: a link to a worktree, nested in the checkout or not,
+ * lets the branch of that worktree select which files teardown deletes.
  */
-const readRebuildable = (raw: RawWorktreeConfig, file: string, root: string, fail: Fail): string[] => {
+const readRebuildable = (raw: RawWorktreeConfig, file: string, fail: Fail): string[] => {
   const segments = 'rebuildable' in raw ? stringList(raw.rebuildable, 'rebuildable', fail) : [];
   if (segments.some(segment => segment === '' || segment === '.' || segment === '..' || segment.includes('/'))) {
     fail('rebuildable', 'expected path segments without "/", other than "." and ".."');
   }
-  if (segments.length > 0 && path.relative(realpathSync(root), realpathSync(file)).startsWith(`..${path.sep}`)) {
-    fail('rebuildable', 'expected a declaration in the main checkout');
+  if (segments.length > 0 && [file, path.dirname(file)].some(entry => lstatSync(entry).isSymbolicLink())) {
+    fail('rebuildable', 'expected a declaration that is not read through a symbolic link');
   }
   return segments;
 };
@@ -213,7 +213,7 @@ export const loadWorktreeConfig = (root: string): WorktreeConfig => {
   return {
     env: 'env' in raw ? environment(raw.env, 'env', true, fail) : {},
     heavy: readHeavy(raw, fail),
-    rebuildable: readRebuildable(raw, file, root, fail),
+    rebuildable: readRebuildable(raw, file, fail),
     services: readServices(raw, fail),
     setup,
   };

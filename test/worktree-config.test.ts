@@ -1,9 +1,11 @@
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { CliError } from '../src/proc.ts';
 import { loadWorktreeConfig } from '../src/worktree-config.ts';
 import { tempDir, useSandbox } from './helpers.ts';
+
+const THROUGH_LINK = 'expected a declaration that is not read through a symbolic link';
 
 let root = '';
 let file = '';
@@ -91,14 +93,19 @@ describe('repository configuration', () => {
       symlinkSync(shared, file);
       expect(loadWorktreeConfig(root).setup).toStrictEqual(['vp install']);
       writeFileSync(shared, JSON.stringify({ rebuildable: ['server.log'] }));
-      expect(thrown()).toMatchObject({ code: 'worktree_config_invalid', message: `${file}: rebuildable: expected a declaration in the main checkout` });
+      expect(thrown()).toMatchObject({ code: 'worktree_config_invalid', message: `${file}: rebuildable: ${THROUGH_LINK}` });
     });
 
-    it('reads rebuildable segments from a configuration linked inside the checkout', () => {
+    it.each(['file', 'directory'] as const)('refuses rebuildable segments read through a symbolic %s inside the checkout', kind => {
       mkdirSync(path.join(root, 'config'));
       writeFileSync(path.join(root, 'config', 'worktree.json'), JSON.stringify({ rebuildable: ['server.log'] }));
-      symlinkSync(path.join('..', 'config', 'worktree.json'), file);
-      expect(loadWorktreeConfig(root).rebuildable).toStrictEqual(['server.log']);
+      if (kind === 'file') {
+        symlinkSync(path.join('..', 'config', 'worktree.json'), file);
+      } else {
+        rmSync(path.dirname(file), { recursive: true });
+        symlinkSync('config', path.dirname(file));
+      }
+      expect(thrown()).toMatchObject({ code: 'worktree_config_invalid', message: `${file}: rebuildable: ${THROUGH_LINK}` });
     });
 
     it.each([

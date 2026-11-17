@@ -305,7 +305,7 @@ export const writeFiles = (dir: string, files: Record<string, Buffer | string>):
   }
 };
 
-/** The `CliError` that `promise` rejects with. It throws when the promise resolves or rejects with another error. */
+/** The `CliError` that `promise` rejects with. It throws when the promise resolves or rejects with a different error. */
 export const rejection = async (promise: Promise<unknown>): Promise<CliError> => {
   try {
     await promise;
