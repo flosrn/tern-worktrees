@@ -163,6 +163,24 @@ test("a relocate of a worktree with work to lose toasts its files", function()
 	eq(toast.detail, "1 file with work to lose: ?? junk.txt", "toast detail")
 end)
 
+test("a relocate refused because the worktree could not be inspected toasts the refusal's message", function()
+	local plugin, cx = open_relocate()
+	cx.asked[2].next(Stub.item(cx.asked[2], "relocate"), nil, cx)
+	local existing = "/old/app/x"
+	local refusal = serde.encode("json", {
+		error = {
+			code = "dirty_worktree",
+			message = `{existing} changed while its ignored files were inspected`,
+			existing = existing,
+		},
+	})
+	plugin:answer("create", refusal, 1, cx)
+	local toast = cx.toasts[#cx.toasts]
+	eq(toast.level, "error", "toast level")
+	eq(toast.title, "Cannot relocate: worktree could not be inspected", "toast title")
+	eq(toast.detail, "x changed while its ignored files were inspected", "toast detail")
+end)
+
 test("a failed relocate toasts the error and the saved files", function()
 	local plugin, cx = open_relocate()
 	cx.asked[2].next(Stub.item(cx.asked[2], "relocate"), nil, cx)

@@ -1175,7 +1175,18 @@ local function create(
 					end
 				end)
 			elseif err.code == "dirty_worktree" then
-				cx2:toast("error", "Cannot relocate: uncommitted changes", dirty_summary(list_dirty_files(err)))
+				-- A refusal that names no files comes from an inspection that could not finish: show its message.
+				local summary = dirty_summary(list_dirty_files(err))
+				if summary ~= "" then
+					cx2:toast("error", "Cannot relocate: uncommitted changes", summary)
+				else
+					local existing = if type(err.existing) == "string" then err.existing else ""
+					cx2:toast(
+						"error",
+						"Cannot relocate: worktree could not be inspected",
+						failure_message(err, existing)
+					)
+				end
 			else
 				toast_error(cx2, err)
 			end
