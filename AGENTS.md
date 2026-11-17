@@ -30,7 +30,7 @@ release. Add a tool name to select part of the graph. For example, run
 
 ## Gates
 
-The pre-commit hook runs the fast checks at each commit: `vp check --fix` on the staged files, then `vp check`, `vp run check:luau`, `vp run test:luau` and `vp run lint:prose`. It runs no tests. Before the push, run `tern-wt heavy -- vp test --coverage` on the committed HEAD, with a clean tree. Put its test counts, coverage, run time and load in the pull request. CI runs all five checks and stays the gate. Local `vp test` uses at most 6 workers. `VITEST_MAX_WORKERS` or `--maxWorkers` changes that number. Mutation testing is optional. Hooks and CI do not run it. Use `vp run test.mutation -- --mutate <files>` for a targeted check.
+The pre-commit hook runs the fast checks at each commit: `vp check --fix` on the staged files, then `vp check`, `vp run check:luau`, `vp run test:luau` and `vp run lint:prose`. It does not run the Vitest suite. Before the push, run `tern-wt heavy -- vp test --coverage` on the committed HEAD, with a clean tree. Put its test counts, coverage, run time and load in the pull request. CI runs all five checks and stays the gate. Local `vp test` uses at most 6 workers. `VITEST_MAX_WORKERS` or `--maxWorkers` changes that number. Mutation testing is optional. Hooks and CI do not run it. Use `vp run test.mutation -- --mutate <files>` for a targeted check.
 
 ## Agent skills
 
