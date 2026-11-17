@@ -2,44 +2,10 @@ import { chmodSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } 
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vite-plus/test';
 import { run } from '../src/commands/clean.ts';
-import { CliError } from '../src/proc.ts';
 import { guardWorkToLose } from '../src/work-to-lose.ts';
-import { git, ignoreGlobally, tempDir, tmpRepo, useSandbox, writeTernLs } from './helpers.ts';
+import { git, ignoreGlobally, nestedSubmodules, rejection, tempDir, tmpRepo, useSandbox, writeFiles, writeTernLs } from './helpers.ts';
 
 const INVALID_SEGMENTS = 'rebuildable: expected path segments without "/", other than "." and ".."';
-
-const writeFiles = (dir: string, files: Record<string, string>): void => {
-  for (const [file, content] of Object.entries(files)) {
-    mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
-    writeFileSync(path.join(dir, file), content);
-  }
-};
-
-const rejection = async (promise: Promise<unknown>): Promise<CliError> => {
-  try {
-    await promise;
-  } catch (error) {
-    if (error instanceof CliError) {
-      return error;
-    }
-    throw error;
-  }
-  throw new Error('the promise resolved');
-};
-
-/** A repository with a submodule `outer` that holds a submodule `inner`, each pushed to its origin. */
-const nestedSubmodules = async (): Promise<string> => {
-  const inner = await tmpRepo('inner');
-  const outer = await tmpRepo('outer');
-  await git(outer.dir, '-c', 'protocol.file.allow=always', 'submodule', '--quiet', 'add', inner.dir, 'inner');
-  await git(outer.dir, 'commit', '--quiet', '-m', 'add inner');
-  await git(outer.dir, 'push', '--quiet', 'origin', 'main');
-  const repo = await tmpRepo();
-  await git(repo.dir, '-c', 'protocol.file.allow=always', 'submodule', '--quiet', 'add', outer.origin, 'outer');
-  await git(repo.dir, '-c', 'protocol.file.allow=always', 'submodule', '--quiet', 'update', '--init', '--recursive');
-  await git(repo.dir, 'commit', '--quiet', '-m', 'add outer');
-  return repo.dir;
-};
 
 /** A linked worktree of a new repository, and its main checkout whose `.tern/worktree.json` declares `rebuildable`. */
 const declaring = async (rebuildable: string[]): Promise<{ dir: string; main: string }> => {

@@ -7,7 +7,7 @@ import { buildRepo } from '../scripts/repo-fixture.ts';
 import type { RepoFixture } from '../scripts/repo-fixture.ts';
 import { main } from '../src/cli.ts';
 import { gitMust } from '../src/git.ts';
-import { must } from '../src/proc.ts';
+import { CliError, must } from '../src/proc.ts';
 import type { TernListing } from '../src/tern.ts';
 
 /** The checkout that the tests run in. */
@@ -295,6 +295,42 @@ export const ignoreGlobally = async (...patterns: string[]): Promise<void> => {
   const excludes = path.join(tempDir('excludes'), 'ignore');
   writeFileSync(excludes, `${patterns.join('\n')}\n`);
   await git(path.dirname(excludes), 'config', '--global', 'core.excludesFile', excludes);
+};
+
+/** Writes each file of `files`, relative to `dir`, and makes its parent directories. */
+export const writeFiles = (dir: string, files: Record<string, Buffer | string>): void => {
+  for (const [file, content] of Object.entries(files)) {
+    mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+    writeFileSync(path.join(dir, file), content);
+  }
+};
+
+/** The `CliError` that `promise` rejects with. It throws when the promise resolves or rejects with another error. */
+export const rejection = async (promise: Promise<unknown>): Promise<CliError> => {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof CliError) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error('the promise resolved');
+};
+
+/** A repository with a submodule `outer` that holds a submodule `inner`, each pushed to its origin. Returns the repository path. */
+export const nestedSubmodules = async (): Promise<string> => {
+  const allowFile = 'protocol.file.allow=always';
+  const inner = await tmpRepo('inner');
+  const outer = await tmpRepo('outer');
+  await git(outer.dir, '-c', allowFile, 'submodule', '--quiet', 'add', inner.dir, 'inner');
+  await git(outer.dir, 'commit', '--quiet', '-m', 'add inner');
+  await git(outer.dir, 'push', '--quiet', 'origin', 'main');
+  const repo = await tmpRepo();
+  await git(repo.dir, '-c', allowFile, 'submodule', '--quiet', 'add', outer.origin, 'outer');
+  await git(repo.dir, '-c', allowFile, 'submodule', '--quiet', 'update', '--init', '--recursive');
+  await git(repo.dir, 'commit', '--quiet', '-m', 'add outer');
+  return repo.dir;
 };
 
 /** Runs `bin/tern-wt` with `args` and returns its exit status and output. */

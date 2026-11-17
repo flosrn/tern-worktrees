@@ -1,29 +1,8 @@
 import { mkdirSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
-import { CliError } from '../src/proc.ts';
 import { guardWorkToLose } from '../src/work-to-lose.ts';
-import { git, gitShim, ignoreGlobally, logGitCalls, readLog, tempDir, tmpRepo, useSandbox } from './helpers.ts';
-
-const nestedSubmodules = async (): Promise<string> => {
-  const inner = await tmpRepo('inner');
-  const outer = await tmpRepo('outer');
-  await git(outer.dir, '-c', 'protocol.file.allow=always', 'submodule', '--quiet', 'add', inner.dir, 'inner');
-  await git(outer.dir, 'commit', '--quiet', '-m', 'add inner');
-  await git(outer.dir, 'push', '--quiet', 'origin', 'main');
-  const repo = await tmpRepo();
-  await git(repo.dir, '-c', 'protocol.file.allow=always', 'submodule', '--quiet', 'add', outer.origin, 'outer');
-  await git(repo.dir, '-c', 'protocol.file.allow=always', 'submodule', '--quiet', 'update', '--init', '--recursive');
-  await git(repo.dir, 'commit', '--quiet', '-m', 'add outer');
-  return repo.dir;
-};
-
-const writeFiles = (dir: string, files: Record<string, Buffer | string>): void => {
-  for (const [file, content] of Object.entries(files)) {
-    mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
-    writeFileSync(path.join(dir, file), content);
-  }
-};
+import { git, gitShim, ignoreGlobally, logGitCalls, nestedSubmodules, readLog, rejection, tempDir, tmpRepo, useSandbox, writeFiles } from './helpers.ts';
 
 /**
  * A worktree and a main checkout with ignored files: a copy with the same bytes (`key.pem`, and `full.bin` of two full chunks), a changed `.env`,
@@ -43,18 +22,6 @@ const copiesOfMain = async (): Promise<{ dir: string; main: string }> => {
   writeFiles(dir, { '.env': 'SECRET=2\n', 'full.bin': full, 'key.pem': 'KEY-A\n', 'only.pem': 'KEY-B\n', 'ragged.bin': changed, 'secrets': '' });
   symlinkSync(path.join(main, 'link.pem'), path.join(dir, 'link.pem'));
   return { dir, main };
-};
-
-const rejection = async (promise: Promise<unknown>): Promise<CliError> => {
-  try {
-    await promise;
-  } catch (error) {
-    if (error instanceof CliError) {
-      return error;
-    }
-    throw error;
-  }
-  throw new Error('the promise resolved');
 };
 
 describe('work to lose', () => {
