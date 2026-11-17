@@ -133,6 +133,7 @@ const readService = (value: unknown, key: string, fail: Fail): Service => {
 const decode = (file: string, fail: Fail): RawWorktreeConfig => {
   let decoded: unknown;
   try {
+    // The work-to-lose guard trusts the main checkout and reads `rebuildable` only from it, not from the worktree it examines (#13).
     decoded = JSON.parse(readFileSync(file).toString());
   } catch (error) {
     return fail('(root)', error instanceof SyntaxError ? `invalid JSON: ${String(error)}` : `cannot read: ${String(error)}`);
