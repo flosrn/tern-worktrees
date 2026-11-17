@@ -1,5 +1,5 @@
 /* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof -- This module validates unknown JSON fields at the file boundary. */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { isJsonObject, isString } from './json.ts';
 import { expandHome } from './paths.ts';
@@ -23,6 +23,8 @@ export interface WorktreeConfig {
   services: Record<string, Service>;
   env: Record<string, string>;
   heavy: { slotMemoryGb: number };
+  /** Path segments of ignored files that the work-to-lose guard treats as rebuildable, with its built-in list. */
+  rebuildable: string[];
 }
 
 type Fail = (key: string, reason: string) => never;
@@ -43,6 +45,7 @@ interface RawWorktreeConfig {
   services?: unknown;
   env?: unknown;
   heavy?: unknown;
+  rebuildable?: unknown;
 }
 
 const rejectUnknownKeys = (keys: string[], known: readonly string[], prefix: string, fail: Fail): void => {
@@ -130,6 +133,7 @@ const readService = (value: unknown, key: string, fail: Fail): Service => {
 const decode = (file: string, fail: Fail): RawWorktreeConfig => {
   let decoded: unknown;
   try {
+    // The work-to-lose guard trusts the main checkout and reads `rebuildable` only from it, not from the worktree it examines (#13).
     decoded = JSON.parse(readFileSync(file).toString());
   } catch (error) {
     return fail('(root)', error instanceof SyntaxError ? `invalid JSON: ${String(error)}` : `cannot read: ${String(error)}`);
@@ -177,6 +181,22 @@ const readHeavy = (raw: RawWorktreeConfig, fail: Fail): WorktreeConfig['heavy'] 
   return { slotMemoryGb };
 };
 
+/**
+ * The declared rebuildable path segments: each one names a whole segment, so it cannot be empty, hold `/`, or be `.` or `..`. A
+ * declaration must not be read through a symbolic link, for `.tern` or for the file: a link to a worktree, nested in the checkout or not,
+ * lets the branch of that worktree select which files teardown deletes.
+ */
+const readRebuildable = (raw: RawWorktreeConfig, file: string, fail: Fail): string[] => {
+  const segments = 'rebuildable' in raw ? stringList(raw.rebuildable, 'rebuildable', fail) : [];
+  if (segments.some(segment => segment === '' || segment === '.' || segment === '..' || segment.includes('/'))) {
+    fail('rebuildable', 'expected path segments without "/", other than "." and ".."');
+  }
+  if (segments.length > 0 && [file, path.dirname(file)].some(entry => lstatSync(entry).isSymbolicLink())) {
+    fail('rebuildable', 'expected a declaration that is not read through a symbolic link');
+  }
+  return segments;
+};
+
 /** Reads `.tern/worktree.json`, using defaults for missing keys and reporting invalid file/key pairs. */
 export const loadWorktreeConfig = (root: string): WorktreeConfig => {
   const file = path.join(root, '.tern', 'worktree.json');
@@ -184,12 +204,18 @@ export const loadWorktreeConfig = (root: string): WorktreeConfig => {
     throw new CliError('worktree_config_invalid', `${file}: ${key}: ${reason}`);
   };
   const raw = existsSync(file) ? decode(file, fail) : {};
-  rejectUnknownKeys(Object.keys(raw), ['setup', 'services', 'env', 'heavy'], '', fail);
+  rejectUnknownKeys(Object.keys(raw), ['setup', 'services', 'env', 'heavy', 'rebuildable'], '', fail);
   const setup = 'setup' in raw ? stringList(raw.setup, 'setup', fail) : [];
   for (const command of setup) {
     if (command.trim() === '' || /[\r\n]/u.test(command)) {
       fail('setup', 'expected non-empty commands without line breaks');
     }
   }
-  return { env: 'env' in raw ? environment(raw.env, 'env', true, fail) : {}, heavy: readHeavy(raw, fail), services: readServices(raw, fail), setup };
+  return {
+    env: 'env' in raw ? environment(raw.env, 'env', true, fail) : {},
+    heavy: readHeavy(raw, fail),
+    rebuildable: readRebuildable(raw, file, fail),
+    services: readServices(raw, fail),
+    setup,
+  };
 };

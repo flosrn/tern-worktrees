@@ -1,9 +1,11 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { CliError } from '../src/proc.ts';
 import { loadWorktreeConfig } from '../src/worktree-config.ts';
 import { tempDir, useSandbox } from './helpers.ts';
+
+const THROUGH_LINK = 'expected a declaration that is not read through a symbolic link';
 
 let root = '';
 let file = '';
@@ -31,11 +33,12 @@ describe('repository configuration', () => {
   describe(loadWorktreeConfig, () => {
     it('provides independent defaults for absent and empty files', () => {
       const config = loadWorktreeConfig(root);
-      expect(config).toStrictEqual({ env: {}, heavy: { slotMemoryGb: 7 }, services: {}, setup: [] });
+      expect(config).toStrictEqual({ env: {}, heavy: { slotMemoryGb: 7 }, rebuildable: [], services: {}, setup: [] });
       config.setup.push('changed');
+      config.rebuildable.push('changed');
       config.heavy.slotMemoryGb = 1;
       writeFileSync(file, '{}');
-      expect(loadWorktreeConfig(root)).toStrictEqual({ env: {}, heavy: { slotMemoryGb: 7 }, services: {}, setup: [] });
+      expect(loadWorktreeConfig(root)).toStrictEqual({ env: {}, heavy: { slotMemoryGb: 7 }, rebuildable: [], services: {}, setup: [] });
     });
 
     it('reads all service options and expands only leading home paths in worktree variables', () => {
@@ -62,6 +65,7 @@ describe('repository configuration', () => {
       expect(loadWorktreeConfig(root)).toStrictEqual({
         env: { CACHE: '/home/test/cache', EMPTY: '', EXACT: '~', LITERAL: '$HOME/$USER', OTHER: '~other/cache' },
         heavy: { slotMemoryGb: 2.5 },
+        rebuildable: [],
         services: { db: service },
         setup: ['vp install', 'echo "$HOME"'],
       });
@@ -72,9 +76,36 @@ describe('repository configuration', () => {
       expect(loadWorktreeConfig(root)).toStrictEqual({
         env: {},
         heavy: { slotMemoryGb: 7 },
+        rebuildable: [],
         services: { redis: { containerPort: 65_535, image: 'redis:7', port: 1 } },
         setup: [],
       });
+    });
+
+    it('reads declared rebuildable path segments', () => {
+      writeFileSync(file, JSON.stringify({ rebuildable: ['server.log', '.demo'] }));
+      expect(loadWorktreeConfig(root).rebuildable).toStrictEqual(['server.log', '.demo']);
+    });
+
+    it('reads a configuration linked from outside the checkout unless it declares rebuildable segments', () => {
+      const shared = path.join(tempDir('shared-config'), 'worktree.json');
+      writeFileSync(shared, JSON.stringify({ setup: ['vp install'] }));
+      symlinkSync(shared, file);
+      expect(loadWorktreeConfig(root).setup).toStrictEqual(['vp install']);
+      writeFileSync(shared, JSON.stringify({ rebuildable: ['server.log'] }));
+      expect(thrown()).toMatchObject({ code: 'worktree_config_invalid', message: `${file}: rebuildable: ${THROUGH_LINK}` });
+    });
+
+    it.each(['file', 'directory'] as const)('refuses rebuildable segments read through a symbolic %s inside the checkout', kind => {
+      mkdirSync(path.join(root, 'config'));
+      writeFileSync(path.join(root, 'config', 'worktree.json'), JSON.stringify({ rebuildable: ['server.log'] }));
+      if (kind === 'file') {
+        symlinkSync(path.join('..', 'config', 'worktree.json'), file);
+      } else {
+        rmSync(path.dirname(file), { recursive: true });
+        symlinkSync('config', path.dirname(file));
+      }
+      expect(thrown()).toMatchObject({ code: 'worktree_config_invalid', message: `${file}: rebuildable: ${THROUGH_LINK}` });
     });
 
     it.each([
@@ -105,6 +136,12 @@ describe('repository configuration', () => {
       [{ services: { 'bad/name': {} } }, 'services.bad/name: expected a Docker service name'],
       [{ services: { db: null } }, 'services.db: expected an object'],
       [{ services: { db: { containerPort: 5432, extra: 1, image: 'postgres', port: 5432 } } }, 'services.db.extra: unknown key'],
+      [{ rebuildable: 'server.log' }, 'rebuildable: expected an array of strings'],
+      [{ rebuildable: ['server.log', 1] }, 'rebuildable: expected an array of strings'],
+      [{ rebuildable: [''] }, 'rebuildable: expected path segments without "/", other than "." and ".."'],
+      [{ rebuildable: ['logs', 'a/b'] }, 'rebuildable: expected path segments without "/", other than "." and ".."'],
+      [{ rebuildable: ['.'] }, 'rebuildable: expected path segments without "/", other than "." and ".."'],
+      [{ rebuildable: ['..'] }, 'rebuildable: expected path segments without "/", other than "." and ".."'],
     ])('rejects invalid configuration %j at its key', (value, reason) => {
       writeFileSync(file, JSON.stringify(value));
       expect(thrown()).toMatchObject({ code: 'worktree_config_invalid', message: `${file}: ${reason}` });

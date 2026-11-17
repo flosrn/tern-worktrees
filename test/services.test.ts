@@ -27,6 +27,7 @@ let stateFile = '';
 const config: WorktreeConfig = {
   env: {},
   heavy: { slotMemoryGb: 7 },
+  rebuildable: [],
   services: { DB: { containerPort: 5432, image: 'postgres:17', port: 55_432 } },
   setup: [],
 };

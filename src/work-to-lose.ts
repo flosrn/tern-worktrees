@@ -2,6 +2,7 @@ import { closeSync, lstatSync, openSync, readSync } from 'node:fs';
 import path from 'node:path';
 import { dirtyFiles, ignoredFiles, recordedSubmoduleCommit, submodules, unpushedCommits } from './git.ts';
 import { CliError } from './proc.ts';
+import { loadWorktreeConfig } from './worktree-config.ts';
 
 /**
  * The operation to stop when the worktree has work to lose. It is `'recreating'` for relocate, or `{ removing }` for teardown, where `removing`
@@ -101,21 +102,29 @@ const changesIn = async (dir: string, subs: string[], main: string): Promise<str
   return [...own, ...nested.flat()];
 };
 
-/** The ignored files of the worktree at `dir` and of each submodule in `subs` that are hard to rebuild, as paths relative to `dir`. */
-const hardToRebuildIn = async (dir: string, subs: string[]): Promise<string[]> => {
+/**
+ * The ignored files of the worktree at `dir` and of each submodule in `subs` that are hard to rebuild, as paths relative to `dir`. A file is
+ * rebuildable when a segment of its path is in `rebuildable`, or when its name ends in `.tsbuildinfo`. The listing skips each submodule with
+ * such a segment in its own path, because all of its files are rebuildable.
+ */
+const hardToRebuildIn = async (dir: string, subs: string[], rebuildable: readonly string[]): Promise<string[]> => {
+  const isRebuildable = (file: string): boolean => file.split('/').some(segment => rebuildable.includes(segment));
   const ignoredIn = async (sub: string): Promise<string[]> => {
-    const files = await ignoredFiles(path.join(dir, sub), REBUILDABLE);
+    const files = await ignoredFiles(path.join(dir, sub), rebuildable);
     return files.map(file => `${sub}/${file}`);
   };
-  const [own, nested] = await Promise.all([ignoredFiles(dir, REBUILDABLE), Promise.all(subs.map(ignoredIn))]);
-  return [...own, ...nested.flat()].filter(file => !file.endsWith('.tsbuildinfo') && !file.split('/').some(segment => REBUILDABLE.includes(segment)));
+  const listed = subs.filter(sub => !isRebuildable(sub));
+  const [own, nested] = await Promise.all([ignoredFiles(dir, rebuildable), Promise.all(listed.map(ignoredIn))]);
+  return [...own, ...nested.flat()].filter(file => !file.endsWith('.tsbuildinfo') && !isRebuildable(file));
 };
 
 /**
  * Throws `dirty_worktree` when `operation` stops on the work to lose in the worktree at `dir`, submodules at each depth included. Relocate
  * stops only on changes, and gives each hard-to-rebuild file to carry. Teardown gives an empty list. It also stops on each hard-to-rebuild
  * file that is not the same, byte for byte, as the file at the same path in the main checkout.
- * `main` is the git checkout with the committed submodule history and object stores that protect submodule commits.
+ * `main` is the git checkout with the committed submodule history and object stores that protect submodule commits. The `rebuildable` path
+ * segments that its `.tern/worktree.json` declares extend {@link REBUILDABLE}. The copy in `dir` is not read. An invalid declaration
+ * throws `worktree_config_invalid`.
  *
  * The error holds `changes`, `hardToRebuild` and `files`. `changes` holds the `git status --porcelain` lines, then for each submodule its
  * `<sub>: <line>` and `<sub>: unpushed <commit>` entries. `hardToRebuild` holds the blocking hard-to-rebuild files, relative to `dir`.
@@ -123,11 +132,12 @@ const hardToRebuildIn = async (dir: string, subs: string[]): Promise<string[]> =
  * files, or when two inspections give different results. That error holds only `existing`.
  */
 export const guardWorkToLose = async (dir: string, operation: Guarded, main: string): Promise<string[]> => {
+  const rebuildable = [...REBUILDABLE, ...loadWorktreeConfig(main).rebuildable];
   const subs = await submodules(dir);
   // A directory renamed between the Git listing and the direct read makes the read see its replacement. A second inspection starts after the
   // first one stops and sees the tree after the rename. The status that runs with it sees the same tree.
-  const first = await hardToRebuildIn(dir, subs);
-  const [changes, hardToRebuild] = await Promise.all([changesIn(dir, subs, main), hardToRebuildIn(dir, subs)]);
+  const first = await hardToRebuildIn(dir, subs, rebuildable);
+  const [changes, hardToRebuild] = await Promise.all([changesIn(dir, subs, main), hardToRebuildIn(dir, subs, rebuildable)]);
   if (first.length !== hardToRebuild.length || first.some((file, index) => file !== hardToRebuild[index])) {
     throw new CliError('dirty_worktree', `${dir} changed while its ignored files were inspected`, { existing: dir });
   }
