@@ -23,6 +23,8 @@ export interface WorktreeConfig {
   services: Record<string, Service>;
   env: Record<string, string>;
   heavy: { slotMemoryGb: number };
+  /** Path segments of ignored files that the work-to-lose guard treats as rebuildable, with its built-in list. */
+  rebuildable: string[];
 }
 
 type Fail = (key: string, reason: string) => never;
@@ -43,6 +45,7 @@ interface RawWorktreeConfig {
   services?: unknown;
   env?: unknown;
   heavy?: unknown;
+  rebuildable?: unknown;
 }
 
 const rejectUnknownKeys = (keys: string[], known: readonly string[], prefix: string, fail: Fail): void => {
@@ -177,6 +180,15 @@ const readHeavy = (raw: RawWorktreeConfig, fail: Fail): WorktreeConfig['heavy'] 
   return { slotMemoryGb };
 };
 
+/** The declared rebuildable path segments: each one names a whole segment, so it cannot be empty, hold `/`, or be `.` or `..`. */
+const readRebuildable = (raw: RawWorktreeConfig, fail: Fail): string[] => {
+  const segments = 'rebuildable' in raw ? stringList(raw.rebuildable, 'rebuildable', fail) : [];
+  if (segments.some(segment => segment === '' || segment === '.' || segment === '..' || segment.includes('/'))) {
+    fail('rebuildable', 'expected path segments without "/", other than "." and ".."');
+  }
+  return segments;
+};
+
 /** Reads `.tern/worktree.json`, using defaults for missing keys and reporting invalid file/key pairs. */
 export const loadWorktreeConfig = (root: string): WorktreeConfig => {
   const file = path.join(root, '.tern', 'worktree.json');
@@ -184,12 +196,18 @@ export const loadWorktreeConfig = (root: string): WorktreeConfig => {
     throw new CliError('worktree_config_invalid', `${file}: ${key}: ${reason}`);
   };
   const raw = existsSync(file) ? decode(file, fail) : {};
-  rejectUnknownKeys(Object.keys(raw), ['setup', 'services', 'env', 'heavy'], '', fail);
+  rejectUnknownKeys(Object.keys(raw), ['setup', 'services', 'env', 'heavy', 'rebuildable'], '', fail);
   const setup = 'setup' in raw ? stringList(raw.setup, 'setup', fail) : [];
   for (const command of setup) {
     if (command.trim() === '' || /[\r\n]/u.test(command)) {
       fail('setup', 'expected non-empty commands without line breaks');
     }
   }
-  return { env: 'env' in raw ? environment(raw.env, 'env', true, fail) : {}, heavy: readHeavy(raw, fail), services: readServices(raw, fail), setup };
+  return {
+    env: 'env' in raw ? environment(raw.env, 'env', true, fail) : {},
+    heavy: readHeavy(raw, fail),
+    rebuildable: readRebuildable(raw, fail),
+    services: readServices(raw, fail),
+    setup,
+  };
 };

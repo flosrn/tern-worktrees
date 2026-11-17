@@ -121,7 +121,7 @@ The submodule check is local: it trusts the commits recorded in `HEAD` of the ma
 
 An omp-owned worktree of the branch needs no relocation: `tern-wt` opens its tab where it is.
 
-Ignored files that are hard to rebuild, for example `.env` or `*.pem`, do not stop the rebuild: `tern-wt` copies them into the new worktree, in the submodules too, and lists them in `carried`. An ignored file is build, install or tool output when a part of its path is `node_modules`, `dist`, `build`, `coverage`, `.DS_Store`, `.cache`, `.next`, `.nuxt`, `.output`, `.turbo`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `__pycache__` or `.venv`, or its filename ends with `.tsbuildinfo`. Those files stay behind. When a step after the copy fails, the error names the temporary folder that keeps the copies.
+Ignored files that are hard to rebuild, for example `.env` or `*.pem`, do not stop the rebuild: `tern-wt` copies them into the new worktree, in the submodules too, and lists them in `carried`. An ignored file is build, install or tool output when a part of its path is `node_modules`, `dist`, `build`, `coverage`, `.DS_Store`, `.cache`, `.next`, `.nuxt`, `.output`, `.turbo`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `__pycache__` or `.venv`, or one of the `rebuildable` segments that the main checkout's [`.tern/worktree.json`](#prepare-a-repository-environment) declares, or its filename ends with `.tsbuildinfo`. Those files stay behind. When a step after the copy fails, the error names the temporary folder that keeps the copies.
 
 ### Close a worktree tab
 
@@ -246,7 +246,7 @@ A Tern key preset or a different plugin can bind the chord first. When `cmd+shif
 
 ## Prepare a repository environment
 
-Commit `.tern/worktree.json` at the checkout root to share setup commands, Docker services, environment variables and the memory allowance for heavy commands:
+Commit `.tern/worktree.json` at the checkout root to share setup commands, Docker services, environment variables, the memory allowance for heavy commands and the ignored files that teardown can delete:
 
 ```json
 {
@@ -263,11 +263,14 @@ Commit `.tern/worktree.json` at the checkout root to share setup commands, Docke
     }
   },
   "env": { "DATABASE_URL": "postgres://postgres:development@localhost:5432/postgres", "BUILD_CACHE": "~/.cache/build" },
-  "heavy": { "slotMemoryGb": 7 }
+  "heavy": { "slotMemoryGb": 7 },
+  "rebuildable": ["next-env.d.ts", "test-results", "server.log"]
 }
 ```
 
 Each top-level key is optional. `setup` is an ordered array of shell commands without line breaks. `services` maps names to Docker declarations. Each service must have `image`, host `port` and `containerPort`. Optional fields are `env` (a string map), `args` (an array of arguments after the image), `tmpfs` and `memory` (strings passed to Docker), and `ready` (a command array run with `docker exec`). Services need a GitHub origin. All worktrees of that repository share the lowercase container name `tern-wt-<owner>-<repo>-<name>` and label `tern-wt.service=<owner>/<repo>/<name>`. Running containers are reused unchanged. Stopped containers are removed and started again from the declaration. A readiness command must succeed in 60 s.
+
+`rebuildable` is an array of path segments, default `[]`. An ignored file with one of these segments anywhere in its path, submodules included, counts as rebuildable output, like the built-in list in [Relocate](#relocate). `remove`, `clean` and delivery finish do not keep a worktree for it, and relocate does not copy it. Each entry is a literal segment: not empty, without `/`, and not `.` or `..`. Globs are not supported. `tern-wt` reads this key only from the main checkout, not from the worktree that it examines, so a branch cannot let teardown delete its own files. An invalid main checkout file keeps each worktree with `worktree_config_invalid`.
 
 Top-level `env` values are literal strings. Only a leading `~/` expands to the home directory. `$VAR` and shell substitutions stay literal. These values apply to setup commands, heavy commands and the setup line of new worktree tabs. `TERN_WT_PORT` is reserved: declaring it in top-level `env` gives `worktree_config_invalid`. In a linked branch worktree, `env` adds the base port as a string, for example `{"env":{"TERN_WT_PORT":"4280"}}` with no repository variables. The main checkout and detached worktrees get no generated `TERN_WT_PORT`. Service `env` values stay literal, also with `~/`. Missing settings default to empty setup, services and declared environment variables, and `heavy.slotMemoryGb: 7`. An invalid repository file gives `worktree_config_invalid`, naming the file and key in its message.
 

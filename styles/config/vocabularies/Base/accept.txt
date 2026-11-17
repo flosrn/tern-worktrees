@@ -105,3 +105,4 @@ omp
 ovnfs
 [Ss]ubagents?
 [Hh]otfix(?:es)?
+[Rr]ebuildable
