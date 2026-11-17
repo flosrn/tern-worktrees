@@ -67,6 +67,14 @@ describe('work to lose in submodule paths that are not initialized', () => {
     expect(error.extra).toStrictEqual({ changes: [], existing: checkout, files: hardToRebuild.map(file => `!! ${file}`), hardToRebuild });
   });
 
+  it('lists each file of a directory that holds .git in a submodule path that is not initialized, so a copy in the main checkout counts', async () => {
+    const { checkout, main } = await uninitializedSubmodule();
+    writeFiles(main, { 'vendor/pocket/notes.md': 'notes\n' });
+    writeFiles(checkout, { 'vendor/pocket/.git': 'gitdir: elsewhere\n', 'vendor/pocket/notes.md': 'notes\n' });
+    const error = await rejection(guardWorkToLose(checkout, { removing: main }, main));
+    expect(error.extra).toStrictEqual({ changes: [], existing: checkout, files: ['!! vendor/pocket/.git'], hardToRebuild: ['vendor/pocket/.git'] });
+  });
+
   it('stops relocate on each file in a submodule path that is not initialized, and carries none', async () => {
     const { checkout, main } = await uninitializedSubmodule();
     await ignoreGlobally('.env');
