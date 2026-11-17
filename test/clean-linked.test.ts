@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { run } from '../src/commands/clean.ts';
@@ -93,6 +93,31 @@ describe('closed linked worktree cleanup', () => {
     const protectedPlan = await run(['--repo', f.repo]);
     expect(protectedPlan.remove.worktrees).toStrictEqual([]);
     expect(protectedPlan.keep.find(item => item.id === f.dir)?.reason).toContain('!! .env.local');
+  });
+
+  it('keeps a closed linked worktree whose ignored files cannot be inspected, and removes it once only a tracked change remains', async () => {
+    const f = await linked('feat/17-feature');
+    ghCleanFixture({ n17: issue(17) });
+    writeFileSync(path.join(f.dir, 'unique.txt'), 'changed tracked content\n');
+    await ignoreGlobally('secret/');
+    const secret = path.join(f.dir, 'secret');
+    mkdirSync(secret);
+    writeFileSync(path.join(secret, 'key'), 'keep\n');
+    chmodSync(secret, 0o000);
+    const log = await logGitCalls();
+    try {
+      const kept = await run(['--repo', f.repo, '--apply']);
+      expect(kept.remove.worktrees).toStrictEqual([]);
+      expect(kept.keep.find(item => item.id === f.dir)?.reason).toMatch(/^worktree inspection failed: Ignored directory secret\/ could not be read/u);
+      expect(readLog(log).some(line => /(?:worktree remove|branch -D|bundle create)/u.test(line))).toBeFalsy();
+      expect(existsSync(path.join(f.dir, 'unique.txt'))).toBeTruthy();
+    } finally {
+      chmodSync(secret, 0o700);
+    }
+    rmSync(secret, { recursive: true });
+    const permitted = await run(['--repo', f.repo]);
+    expect(permitted.remove.worktrees).toStrictEqual([f.dir]);
+    expect(permitted.removalDetails?.[0]).toMatchObject({ id: f.dir, recovery: true });
   });
 
   it('lets closed basename evidence clean detached work while preserving its tip', async () => {
