@@ -409,6 +409,22 @@ export const updateSubmodules = async (root: string, dir: string): Promise<strin
 /** The paths of the initialized submodules of the worktree at `dir`, at each depth, relative to `dir`. A submodule comes before the submodules in it. */
 export const submodules = async (dir: string): Promise<string[]> => lines(await gitMust(dir, 'submodule', 'foreach', '--quiet', '--recursive', 'printf "%s\\n" "$displaypath"'));
 
+/**
+ * The paths of the submodule entries (mode `160000`) in the index of the checkout at `dir`, once each, relative to `dir`. It refuses a submodule
+ * path that cannot be decoded as UTF-8 without loss. The paths of other entries do not matter.
+ */
+export const gitlinks = async (dir: string): Promise<string[]> => {
+  const output = await gitMust(dir, 'ls-files', '-z', '--stage');
+  const links = output
+    .split('\0')
+    .filter(entry => entry.startsWith('160000 '))
+    .map(entry => entry.slice(entry.indexOf('\t') + 1));
+  if (links.some(link => link.includes('\uFFFD'))) {
+    throw new CliError('git_failed', 'A path name cannot be decoded as UTF-8 without loss');
+  }
+  return [...new Set(links)];
+};
+
 /** The commit recorded for `sub` at `revision` that is also in the object store of the submodule, or null. */
 export const recordedSubmoduleCommit = async (dir: string, revision: string, sub: string): Promise<string | null> => {
   const result = await gitRun(dir, 'ls-tree', '--format=%(objectname)', revision, '--', sub);
@@ -439,10 +455,10 @@ const ignoredOutput = async (dir: string, args: string[]): Promise<string> => {
 const inspectedDirectory = (directory: string, expected?: Pick<Stats, 'dev' | 'ino'>): Stats => {
   const stat = lstatSync(directory);
   if (!stat.isDirectory()) {
-    throw new Error('The ignored directory changed type before inspection');
+    throw new Error('The directory changed type before inspection');
   }
   if (expected !== undefined && (stat.dev !== expected.dev || stat.ino !== expected.ino)) {
-    throw new Error('The ignored directory changed identity during inspection');
+    throw new Error('The directory changed identity during inspection');
   }
   return stat;
 };
@@ -454,7 +470,18 @@ const pushAll = (target: string[], items: string[]): void => {
   }
 };
 
-const readIgnoredDirectory = (dir: string, relative: string, pruned: readonly string[], expected?: { dev: number; ino: number }): string[] => {
+/**
+ * How {@link readDirectory} reads: the directory names it skips, if a directory that holds `.git` is one entry, and the name of the directory
+ * in its error.
+ */
+interface DirectoryRead {
+  pruned: readonly string[];
+  repositoryAsEntry: boolean;
+  kind: string;
+}
+
+/** The files in `relative`, a directory of `dir` that ends with `/`, at each depth, as `read` tells. */
+const readDirectory = (dir: string, relative: string, read: DirectoryRead, expected?: { dev: number; ino: number }): string[] => {
   try {
     const directory = path.join(dir, relative.slice(0, -1));
     const before = inspectedDirectory(directory, expected);
@@ -463,7 +490,7 @@ const readIgnoredDirectory = (dir: string, relative: string, pruned: readonly st
     if (entries.some(entry => !isUtf8(entry))) {
       throw new Error('A path name cannot be decoded as UTF-8 without loss');
     }
-    if (entries.some(entry => entry.equals(Buffer.from('.git')))) {
+    if (read.repositoryAsEntry && entries.some(entry => entry.equals(Buffer.from('.git')))) {
       return [relative];
     }
     const files: string[] = [];
@@ -471,8 +498,8 @@ const readIgnoredDirectory = (dir: string, relative: string, pruned: readonly st
       const name = entry.toString();
       const stat = lstatSync(path.join(dir, relative, name));
       if (stat.isDirectory()) {
-        if (!pruned.includes(name)) {
-          pushAll(files, readIgnoredDirectory(dir, `${relative}${name}/`, pruned, stat));
+        if (!read.pruned.includes(name)) {
+          pushAll(files, readDirectory(dir, `${relative}${name}/`, read, stat));
         }
       } else if (stat.isFile() || stat.isSymbolicLink()) {
         files.push(`${relative}${name}`);
@@ -481,8 +508,26 @@ const readIgnoredDirectory = (dir: string, relative: string, pruned: readonly st
     inspectedDirectory(directory, before);
     return files;
   } catch (error) {
-    throw new CliError('dirty_worktree', `Ignored directory ${relative} could not be read: ${String(error)}`, { existing: dir });
+    throw new CliError('dirty_worktree', `${read.kind} ${relative} could not be read: ${String(error)}`, { existing: dir });
   }
+};
+
+/**
+ * The files in the directory `relative` of `dir`, at each depth, sorted, relative to `dir`. It does not follow symbolic links: a symbolic
+ * link is one file, and a `.git` entry is a file or directory like others. A missing path, a path in a file, or a path that is not a
+ * directory gives none.
+ */
+export const filesUnder = (dir: string, relative: string): string[] => {
+  let stat: Stats | undefined;
+  try {
+    stat = lstatSync(path.join(dir, relative), { throwIfNoEntry: false });
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOTDIR') {
+      return [];
+    }
+    throw new CliError('dirty_worktree', `Directory ${relative}/ could not be read: ${String(error)}`, { existing: dir });
+  }
+  return stat?.isDirectory() === true ? readDirectory(dir, `${relative}/`, { kind: 'Directory', pruned: [], repositoryAsEntry: false }).toSorted() : [];
 };
 
 /**
@@ -515,7 +560,7 @@ export const ignoredFiles = async (dir: string, pruned: readonly string[]): Prom
     }
   }
   for (const directory of directories) {
-    pushAll(files, readIgnoredDirectory(dir, directory, pruned));
+    pushAll(files, readDirectory(dir, directory, { kind: 'Ignored directory', pruned, repositoryAsEntry: true }));
   }
   return [...new Set(files)].toSorted();
 };

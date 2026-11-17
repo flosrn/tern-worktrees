@@ -263,7 +263,7 @@ describe('work to lose', () => {
       expect(error.code).toBe('dirty_worktree');
       expect(error.extra).toStrictEqual({ changes: [], existing: dir, files: expected.map(file => `!! ${file}`), hardToRebuild: expected });
       await expect(guardWorkToLose(dir, 'recreating', dir)).resolves.toStrictEqual(expected);
-      const listings = readLog(log).filter(call => call.includes(' ls-files '));
+      const listings = readLog(log).filter(call => call.includes(' ls-files -z --others '));
       expect(listings.every(call => call.includes(' --directory'))).toBeTruthy();
       // Two guards, each with two inspections.
       expect(listings).toHaveLength(4);
@@ -291,7 +291,7 @@ describe('work to lose', () => {
       expect(error.code).toBe('dirty_worktree');
       expect(error.extra).toStrictEqual({ changes: [], existing: dir, files: expected.map(file => `!! ${file}`), hardToRebuild: expected });
       await expect(guardWorkToLose(dir, 'recreating', dir)).resolves.toStrictEqual(expected);
-      const listings = readLog(log).filter(call => call.includes(`${inner} ls-files `));
+      const listings = readLog(log).filter(call => call.includes(`${inner} ls-files -z --others `));
       expect(listings.every(call => call.includes(' --directory'))).toBeTruthy();
       expect(listings).toHaveLength(4);
     });
@@ -302,7 +302,7 @@ describe('work to lose', () => {
       writeFiles(dir, { 'local/settings.env': 'local settings\n' });
       const log = path.join(tempDir('pathspec-env'), 'git.log');
       await gitShim(
-        `if [ "$3" = ls-files ]; then printf '%s %s %s %s\\n' "$GIT_LITERAL_PATHSPECS" "$GIT_GLOB_PATHSPECS" "$GIT_NOGLOB_PATHSPECS" "$GIT_ICASE_PATHSPECS" >>'${log}'; fi`,
+        `if [ "$3 $5" = 'ls-files --others' ]; then printf '%s %s %s %s\\n' "$GIT_LITERAL_PATHSPECS" "$GIT_GLOB_PATHSPECS" "$GIT_NOGLOB_PATHSPECS" "$GIT_ICASE_PATHSPECS" >>'${log}'; fi`,
       );
       vi.stubEnv(variable, '1');
       await expect(guardWorkToLose(dir, 'recreating', dir)).resolves.toStrictEqual(['local/settings.env']);
@@ -315,14 +315,14 @@ describe('work to lose', () => {
 
     it('keeps work to lose when a listed ignored directory disappears before it can be read', async () => {
       const { dir } = await tmpRepo();
-      await gitShim(`if [ "$3" = ls-files ]; then printf 'missing/\\0'; exit 0; fi`);
+      await gitShim(`if [ "$3 $5" = 'ls-files --others' ]; then printf 'missing/\\0'; exit 0; fi`);
       await expect(guardWorkToLose(dir, 'recreating', dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
       await expect(guardWorkToLose(dir, { removing: tempDir('main') }, dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
     });
 
     it('keeps work to lose when ignored directory listing fails even with partial output', async () => {
       const { dir } = await tmpRepo();
-      await gitShim(`if [ "$3" = ls-files ]; then printf 'local/settings.env\\0'; echo 'listing failed' >&2; exit 9; fi`);
+      await gitShim(`if [ "$3 $5" = 'ls-files --others' ]; then printf 'local/settings.env\\0'; echo 'listing failed' >&2; exit 9; fi`);
       await expect(guardWorkToLose(dir, 'recreating', dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
       await expect(guardWorkToLose(dir, { removing: tempDir('main') }, dir)).rejects.toMatchObject({ code: 'dirty_worktree' });
     });

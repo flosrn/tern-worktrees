@@ -55,11 +55,11 @@ The list of each worktree in the worktree root, with its main checkout, its bran
 _Avoid_: Worktree cache, worktree map
 
 **Relocate**:
-To move the worktree of a branch into the worktree root from a directory that is not in the root. The worktree then is a managed worktree. When the worktree must be made again, the files that are hard to rebuild come along.
+To move the worktree of a branch into the worktree root from a directory that is not in the root. The worktree then is a managed worktree. When the worktree must be made again, the ignored files that are hard to rebuild come along. A file in a submodule path that is not initialized stops it.
 _Avoid_: Adopt, migrate, import
 
 **Hard-to-rebuild file**:
-An ignored file that no build, install or tool run makes again, for example a `.env` file. Its loss counts as work to lose. Ignored build output, installed packages and tool caches are not hard to rebuild. A repository can name more rebuildable path segments in the `rebuildable` key of the main checkout's `.tern/worktree.json`, for example a log or a generated declaration. At teardown, a copy with the bytes of the file at the same path in the main checkout also does not count.
+An ignored file that no build, install or tool run makes again, for example a `.env` file. Also each file in a submodule path that is not initialized in the worktree, which git does not list. Its loss counts as work to lose. Ignored build output, installed packages and tool caches are not hard to rebuild. A repository can name more rebuildable path segments in the `rebuildable` key of the main checkout's `.tern/worktree.json`, for example a log or a generated declaration. At teardown, a copy with the bytes of the file at the same path in the main checkout also does not count.
 _Avoid_: Secret file, precious file
 
 **Work to lose**:

@@ -200,3 +200,24 @@ describe('closed linked worktree cleanup', () => {
     expect(result.warnings).toContain('merged PR check failed: config-unavailable');
   });
 });
+
+describe('closed linked worktree cleanup with a submodule path that is not initialized', () => {
+  beforeEach(() => {
+    useSandbox();
+    writeTernLs({ work: [] });
+  });
+
+  it('keeps a closed linked worktree whose only local work is a file in a submodule path that is not initialized', async () => {
+    const vendor = await tmpRepo('vendor');
+    const f = await linked('feat/17-feature');
+    await git(f.repo, '-c', 'protocol.file.allow=always', 'submodule', '--quiet', 'add', vendor.origin, 'vendor');
+    await git(f.repo, 'commit', '--quiet', '-m', 'add vendor');
+    await git(f.repo, 'push', '--quiet', 'origin', 'main');
+    await git(f.dir, 'reset', '--quiet', '--hard', 'origin/main');
+    writeFileSync(path.join(f.dir, 'vendor', 'notes.md'), 'keep these notes\n');
+    ghCleanFixture({ n17: issue(17) });
+    const result = await run(['--repo', f.repo]);
+    expect(result.remove.worktrees).toStrictEqual([]);
+    expect(result.keep.find(item => item.id === f.dir)?.reason).toContain('!! vendor/notes.md');
+  });
+});

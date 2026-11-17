@@ -150,12 +150,12 @@ export const gitShim = async (script: string): Promise<string> => {
   return dir;
 };
 
-/** Makes the `listing`th `git ls-files` run the real Git, then the shell `commands`. Thus the tree changes once, right after that Git listing. */
+/** Makes the `listing`th `git ls-files` of ignored files run the real Git, then the shell `commands`. Thus the tree changes once, right after that Git listing. */
 export const afterGitListing = async (listing: number, commands: string): Promise<void> => {
   const gitPath = await must(['sh', '-c', 'command -v git'], 'git_failed');
   const realGit = gitPath.trim();
   const count = path.join(tempDir('listing'), 'count');
-  await gitShim(`if [ "$3" = ls-files ]; then
+  await gitShim(`if [ "$3 $5" = 'ls-files --others' ]; then
   '${realGit}' "$@"
   status=$?
   seen=$(($(cat '${count}' 2>/dev/null || echo 0) + 1))
