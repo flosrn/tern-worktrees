@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { CliError } from '../src/proc.ts';
@@ -83,6 +83,22 @@ describe('repository configuration', () => {
     it('reads declared rebuildable path segments', () => {
       writeFileSync(file, JSON.stringify({ rebuildable: ['server.log', '.demo'] }));
       expect(loadWorktreeConfig(root).rebuildable).toStrictEqual(['server.log', '.demo']);
+    });
+
+    it('reads a configuration linked from outside the checkout unless it declares rebuildable segments', () => {
+      const shared = path.join(tempDir('shared-config'), 'worktree.json');
+      writeFileSync(shared, JSON.stringify({ setup: ['vp install'] }));
+      symlinkSync(shared, file);
+      expect(loadWorktreeConfig(root).setup).toStrictEqual(['vp install']);
+      writeFileSync(shared, JSON.stringify({ rebuildable: ['server.log'] }));
+      expect(thrown()).toMatchObject({ code: 'worktree_config_invalid', message: `${file}: rebuildable: expected a declaration in the main checkout` });
+    });
+
+    it('reads rebuildable segments from a configuration linked inside the checkout', () => {
+      mkdirSync(path.join(root, 'config'));
+      writeFileSync(path.join(root, 'config', 'worktree.json'), JSON.stringify({ rebuildable: ['server.log'] }));
+      symlinkSync(path.join('..', 'config', 'worktree.json'), file);
+      expect(loadWorktreeConfig(root).rebuildable).toStrictEqual(['server.log']);
     });
 
     it.each([

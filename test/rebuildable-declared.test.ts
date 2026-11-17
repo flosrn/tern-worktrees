@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vite-plus/test';
 import { run } from '../src/commands/clean.ts';
@@ -96,6 +96,23 @@ describe('declared rebuildable segments', () => {
       writeFiles(dir, { 'server.log': 'started\n' });
       const error = await rejection(guardWorkToLose(dir, { removing: main }, main));
       expect({ code: error.code, hardToRebuild: error.extra.hardToRebuild }).toStrictEqual({ code: 'dirty_worktree', hardToRebuild: ['server.log'] });
+    });
+
+    it('stops teardown when the main checkout declaration links to a file outside the main checkout', async () => {
+      const { dir, main } = await declaring([]);
+      writeFiles(dir, { '.tern/worktree.json': JSON.stringify({ rebuildable: ['server.log'] }) });
+      await git(dir, 'add', '.tern');
+      await git(dir, 'commit', '--quiet', '-m', 'declare server.log');
+      writeFiles(dir, { 'server.log': 'started\n' });
+      const file = path.join(main, '.tern', 'worktree.json');
+      rmSync(file);
+      symlinkSync(path.join(dir, '.tern', 'worktree.json'), file);
+      const error = await rejection(guardWorkToLose(dir, { removing: main }, main));
+      expect({ code: error.code, message: error.message }).toStrictEqual({
+        code: 'worktree_config_invalid',
+        message: `${file}: rebuildable: expected a declaration in the main checkout`,
+      });
+      expect(existsSync(path.join(dir, 'server.log'))).toBeTruthy();
     });
 
     it('applies a declared segment inside submodules at each depth, without reading a declared directory', async () => {
