@@ -6,14 +6,7 @@ import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { guardWorkToLose } from '../src/work-to-lose.ts';
 import { must } from '../src/proc.ts';
-import { afterGitListing, git, gitShim, ignoreGlobally, tempDir, tmpRepo, useSandbox } from './helpers.ts';
-
-const writeFiles = (dir: string, files: Record<string, string>): void => {
-  for (const [file, content] of Object.entries(files)) {
-    mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
-    writeFileSync(path.join(dir, file), content);
-  }
-};
+import { afterGitListing, git, gitShim, ignoreGlobally, tempDir, tmpRepo, useSandbox, writeFiles } from './helpers.ts';
 
 describe('work-to-lose inspection failures', () => {
   beforeEach(() => {

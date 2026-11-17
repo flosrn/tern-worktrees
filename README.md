@@ -119,6 +119,8 @@ When git refuses the move, `tern-wt` makes the worktree again in the root with p
 
 The submodule check is local: it trusts the commits recorded in `HEAD` of the main checkout, and their ancestors, also for nested submodules, only when the two submodule object stores have the recorded commit: the main checkout and the worktree. Otherwise, only remote branches protect the commits. A release tag need not be fetched. A local tag alone does not protect a commit. A submodule commit recorded only in the worktree being removed or relocated does not protect it.
 
+When an index path cannot be decoded as UTF-8 without loss, the inspection stops with `git_failed` and keeps the worktree.
+
 An omp-owned worktree of the branch needs no relocation: `tern-wt` opens its tab where it is.
 
 Ignored files that are hard to rebuild, for example `.env` or `*.pem`, do not stop the rebuild: `tern-wt` copies them into the new worktree, in the submodules too, and lists them in `carried`. An ignored file is build, install or tool output when a part of its path is `node_modules`, `dist`, `build`, `coverage`, `.DS_Store`, `.cache`, `.next`, `.nuxt`, `.output`, `.turbo`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `__pycache__` or `.venv`, or one of the `rebuildable` segments that the main checkout's [`.tern/worktree.json`](#prepare-a-repository-environment) declares, or its filename ends with `.tsbuildinfo`. Those files stay behind. When a step after the copy fails, the error names the temporary folder that keeps the copies.

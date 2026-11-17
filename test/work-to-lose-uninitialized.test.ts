@@ -1,29 +1,9 @@
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vite-plus/test';
 import { gitRun } from '../src/git.ts';
-import { CliError } from '../src/proc.ts';
 import { guardWorkToLose } from '../src/work-to-lose.ts';
-import { git, ignoreGlobally, tempDir, tmpRepo, useSandbox } from './helpers.ts';
-
-const writeFiles = (dir: string, files: Record<string, string>): void => {
-  for (const [file, content] of Object.entries(files)) {
-    mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
-    writeFileSync(path.join(dir, file), content);
-  }
-};
-
-const rejection = async (promise: Promise<unknown>): Promise<CliError> => {
-  try {
-    await promise;
-  } catch (error) {
-    if (error instanceof CliError) {
-      return error;
-    }
-    throw error;
-  }
-  throw new Error('the promise resolved');
-};
+import { git, gitShim, ignoreGlobally, rejection, tempDir, tmpRepo, useSandbox, writeFiles } from './helpers.ts';
 
 /** A main checkout with the submodule `vendor`, and a linked worktree where `vendor` is not initialized. */
 const uninitializedSubmodule = async (): Promise<{ checkout: string; main: string }> => {
@@ -56,6 +36,18 @@ const uninitializedNestedSubmodule = async (): Promise<{ checkout: string; main:
 describe('work to lose in submodule paths that are not initialized', () => {
   beforeEach(() => {
     useSandbox();
+  });
+
+  it('keeps the worktree when a gitlink path cannot be decoded without loss', async () => {
+    const { checkout, main } = await uninitializedSubmodule();
+    await gitShim(`if [ "$3 $5" = 'ls-files --stage' ]; then printf '160000 0000000000000000000000000000000000000000 0\\tvendor-\\377\\0'; exit 0; fi`);
+    await Promise.all(
+      (['recreating', { removing: main }] as const).map(async operation => {
+        const failure = guardWorkToLose(checkout, operation, main);
+        await expect(failure).rejects.toMatchObject({ code: 'git_failed' });
+        await expect(failure).rejects.toThrow(/path name.*UTF-8/u);
+      }),
+    );
   });
 
   it('stops teardown on each file in a submodule path that is not initialized', async () => {

@@ -411,7 +411,7 @@ export const submodules = async (dir: string): Promise<string[]> => lines(await 
 
 /** The paths of the submodule entries (mode `160000`) in the index of the checkout at `dir`, once each, relative to `dir`. */
 export const gitlinks = async (dir: string): Promise<string[]> => {
-  const output = await gitMust(dir, 'ls-files', '-z', '--stage');
+  const output = await must(['git', '-C', dir, 'ls-files', '-z', '--stage'], 'git_failed', { strictUtf8: true });
   const entries = output.split('\0');
   return [...new Set(entries.filter(entry => entry.startsWith('160000 ')).map(entry => entry.slice(entry.indexOf('\t') + 1)))];
 };
